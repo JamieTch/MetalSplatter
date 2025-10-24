@@ -2,6 +2,11 @@ import Foundation
 import simd
 
 public struct SplatScenePoint {
+    public static let defaultAlbedo = SIMD3<Float>(repeating: 1)
+    public static let defaultMetallic: Float = 0
+    public static let defaultRoughness: Float = 1
+    public static let defaultNormal = SIMD3<Float>(x: 0, y: 0, z: 1)
+
     public enum Color {
         static let SH_C0: Float = 0.28209479177387814
         static let INV_SH_C0: Float = 1.0 / SH_C0
@@ -146,22 +151,46 @@ public struct SplatScenePoint {
         }
     }
 
+    public enum AlbedoInput {
+        case linearFloat(SIMD3<Float>)
+        case linearFloat256(SIMD3<Float>)
+        case linearUInt8(SIMD3<UInt8>)
+    }
+
+    public enum UnitScalarInput {
+        case float(Float)
+        case float256(Float)
+        case uint8(UInt8)
+    }
+
     public var position: SIMD3<Float>
     public var color: Color
     public var opacity: Opacity
     public var scale: Scale
     public var rotation: simd_quatf
+    public var albedo: SIMD3<Float>
+    public var metallic: Float
+    public var roughness: Float
+    public var normal: SIMD3<Float>
 
     public init(position: SIMD3<Float>,
                 color: Color,
                 opacity: Opacity,
                 scale: Scale,
-                rotation: simd_quatf) {
+                rotation: simd_quatf,
+                albedo: SIMD3<Float> = Self.defaultAlbedo,
+                metallic: Float = Self.defaultMetallic,
+                roughness: Float = Self.defaultRoughness,
+                normal: SIMD3<Float> = Self.defaultNormal) {
         self.position = position
         self.color = color
         self.opacity = opacity
         self.scale = scale
         self.rotation = rotation
+        self.albedo = albedo.clamped01()
+        self.metallic = metallic.clamped(to: 0...1)
+        self.roughness = roughness.clamped(to: 0...1)
+        self.normal = normal.normalizedOrDefault(Self.defaultNormal)
     }
 
     var linearNormalized: SplatScenePoint {
@@ -169,13 +198,68 @@ public struct SplatScenePoint {
                         color: .linearFloat(color.asLinearFloat),
                         opacity: .linearFloat(opacity.asLinearFloat),
                         scale: .linearFloat(scale.asLinearFloat),
-                        rotation: rotation.normalized)
+                        rotation: rotation.normalized,
+                        albedo: albedo.clamped01(),
+                        metallic: metallic.clamped(to: 0...1),
+                        roughness: roughness.clamped(to: 0...1),
+                        normal: normal.normalizedOrDefault(Self.defaultNormal))
+    }
+
+    public mutating func setAlbedo(_ input: AlbedoInput) {
+        switch input {
+        case .linearFloat(let values):
+            albedo = values.clamped01()
+        case .linearFloat256(let values):
+            albedo = (values / 256).clamped01()
+        case .linearUInt8(let values):
+            albedo = (values.asFloat / 255).clamped01()
+        }
+    }
+
+    public mutating func setMetallic(_ input: UnitScalarInput) {
+        switch input {
+        case .float(let value):
+            metallic = value.clamped(to: 0...1)
+        case .float256(let value):
+            metallic = (value / 256).clamped(to: 0...1)
+        case .uint8(let value):
+            metallic = (Float(value) / 255.0).clamped(to: 0...1)
+        }
+    }
+
+    public mutating func setRoughness(_ input: UnitScalarInput) {
+        switch input {
+        case .float(let value):
+            roughness = value.clamped(to: 0...1)
+        case .float256(let value):
+            roughness = (value / 256).clamped(to: 0...1)
+        case .uint8(let value):
+            roughness = (Float(value) / 255.0).clamped(to: 0...1)
+        }
+    }
+
+    public mutating func setNormal(_ newNormal: SIMD3<Float>) {
+        normal = newNormal.normalizedOrDefault(Self.defaultNormal)
     }
 }
 
 fileprivate extension SIMD3 where Scalar == Float {
     var asUInt8: SIMD3<UInt8> {
         SIMD3<UInt8>(x: x.asUInt8, y: y.asUInt8, z: z.asUInt8)
+    }
+
+    func clamped01() -> SIMD3<Float> {
+        SIMD3(x: x.clamped(to: 0...1),
+              y: y.clamped(to: 0...1),
+              z: z.clamped(to: 0...1))
+    }
+
+    func normalizedOrDefault(_ defaultValue: SIMD3<Float>) -> SIMD3<Float> {
+        let length = simd_length(self)
+        if length > .leastNonzeroMagnitude {
+            return self / length
+        }
+        return defaultValue
     }
 }
 
