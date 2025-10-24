@@ -98,19 +98,34 @@ class VisionSceneRenderer {
 
         let simdDeviceAnchor = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
 
-        return drawable.views.map { view in
+        return drawable.views.enumerated().map { (i, view) in
             let userViewpointMatrix = (simdDeviceAnchor * view.transform).inverse
-            let projectionMatrix = ProjectiveTransform3D(leftTangent: Double(view.tangents[0]),
-                                                         rightTangent: Double(view.tangents[1]),
-                                                         topTangent: Double(view.tangents[2]),
-                                                         bottomTangent: Double(view.tangents[3]),
-                                                         nearZ: Double(drawable.depthRange.y),
-                                                         farZ: Double(drawable.depthRange.x),
-                                                         reverseZ: true)
+            // Compute per-view projection:
+            // On visionOS 2.0+, use the compositor-provided projection helper for mixed reality.
+            // On older SDKs, fall back to constructing from tangents.
+            let projMatrixSIMD: simd_float4x4
+            if #available(visionOS 2.0, *) {
+                // Swift wrapper for the C API cp_drawable_compute_projection.
+                // If your SDK uses a different symbol (e.g., on drawable or view), adjust the call name.
+                projMatrixSIMD = drawable.computeProjection(viewIndex: i)
+            } else {
+                // Legacy path for visionOS 1.x
+                let legacyProj = ProjectiveTransform3D(
+                    leftTangent:  Double(view.tangents[0]),
+                    rightTangent: Double(view.tangents[1]),
+                    topTangent:   Double(view.tangents[2]),
+                    bottomTangent:Double(view.tangents[3]),
+                    nearZ:  Double(drawable.depthRange.y),
+                    farZ:   Double(drawable.depthRange.x),
+                    reverseZ: true
+                )
+                // Convert ProjectiveTransform3D to simd_float4x4; adjust accessor if your type differs.
+                projMatrixSIMD = simd_float4x4(legacyProj)
+            }
             let screenSize = SIMD2(x: Int(view.textureMap.viewport.width),
                                    y: Int(view.textureMap.viewport.height))
             return ModelRendererViewportDescriptor(viewport: view.textureMap.viewport,
-                                                   projectionMatrix: .init(projectionMatrix),
+                                                   projectionMatrix: projMatrixSIMD,
                                                    viewMatrix: userViewpointMatrix * translationMatrix * rotationMatrix * commonUpCalibration,
                                                    screenSize: screenSize)
         }
