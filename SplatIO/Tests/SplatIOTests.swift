@@ -1,6 +1,7 @@
 import XCTest
 import Spatial
 import SplatIO
+import simd
 
 final class SplatIOTests: XCTestCase {
     class ContentCounter: SplatSceneReaderDelegate {
@@ -157,6 +158,154 @@ final class SplatIOTests: XCTestCase {
             XCTAssertEqual(expectedPointCount, content.pointCount)
         }
     }
+
+    private func readPoints(fromASCII ascii: String) throws -> [SplatScenePoint] {
+        let data = Data(ascii.utf8)
+        let stream = InputStream(data: data)
+        stream.open()
+        defer { stream.close() }
+
+        let reader = SplatPLYSceneReader(stream)
+        let content = ContentStorage()
+        reader.read(to: content)
+        XCTAssertTrue(content.didFinish)
+        XCTAssertFalse(content.didFail)
+        return content.points
+    }
+
+    func testPLYMaterialFloat32() throws {
+        let ascii = """
+        ply
+        format ascii 1.0
+        element vertex 1
+        property float x
+        property float y
+        property float z
+        property float nx
+        property float ny
+        property float nz
+        property float f_dc_0
+        property float f_dc_1
+        property float f_dc_2
+        property float opacity
+        property float scale_0
+        property float scale_1
+        property float scale_2
+        property float rot_0
+        property float rot_1
+        property float rot_2
+        property float rot_3
+        property float albedo_r
+        property float albedo_g
+        property float albedo_b
+        property float metallic
+        property float roughness
+        end_header
+        0 0 0 0 0 1 0 0 0 0 1 1 1 1 0 0 0 0.25 0.5 0.75 0.2 0.8
+        """
+
+        let points = try readPoints(fromASCII: ascii)
+        XCTAssertEqual(points.count, 1)
+        let point = try XCTUnwrap(points.first)
+        XCTAssertEqual(point.albedo.x, 0.25, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.y, 0.5, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.z, 0.75, accuracy: 1e-5)
+        XCTAssertEqual(point.metallic, 0.2, accuracy: 1e-5)
+        XCTAssertEqual(point.roughness, 0.8, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.x, 0.0, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.y, 0.0, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.z, 1.0, accuracy: 1e-5)
+    }
+
+    func testPLYMaterialFloat32Times256() throws {
+        let ascii = """
+        ply
+        format ascii 1.0
+        element vertex 1
+        property float x
+        property float y
+        property float z
+        property float nx
+        property float ny
+        property float nz
+        property float f_dc_0
+        property float f_dc_1
+        property float f_dc_2
+        property float opacity
+        property float scale_0
+        property float scale_1
+        property float scale_2
+        property float rot_0
+        property float rot_1
+        property float rot_2
+        property float rot_3
+        property float albedo_r
+        property float albedo_g
+        property float albedo_b
+        property float metallic
+        property float roughness
+        end_header
+        0 0 0 1 1 1 0 0 0 0 1 1 1 1 0 0 0 64 128 192 128 64
+        """
+
+        let points = try readPoints(fromASCII: ascii)
+        XCTAssertEqual(points.count, 1)
+        let point = try XCTUnwrap(points.first)
+        XCTAssertEqual(point.albedo.x, 64.0 / 256.0, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.y, 128.0 / 256.0, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.z, 192.0 / 256.0, accuracy: 1e-5)
+        XCTAssertEqual(point.metallic, 128.0 / 256.0, accuracy: 1e-5)
+        XCTAssertEqual(point.roughness, 64.0 / 256.0, accuracy: 1e-5)
+        let expectedNormal = simd_normalize(SIMD3<Float>(1, 1, 1))
+        XCTAssertEqual(point.normal.x, expectedNormal.x, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.y, expectedNormal.y, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.z, expectedNormal.z, accuracy: 1e-5)
+    }
+
+    func testPLYMaterialUInt8() throws {
+        let ascii = """
+        ply
+        format ascii 1.0
+        element vertex 1
+        property float x
+        property float y
+        property float z
+        property float nx
+        property float ny
+        property float nz
+        property float f_dc_0
+        property float f_dc_1
+        property float f_dc_2
+        property float opacity
+        property float scale_0
+        property float scale_1
+        property float scale_2
+        property float rot_0
+        property float rot_1
+        property float rot_2
+        property float rot_3
+        property uchar albedo_r
+        property uchar albedo_g
+        property uchar albedo_b
+        property uchar metallic
+        property uchar roughness
+        end_header
+        0 0 0 0 1 0 0 0 0 0 1 1 1 1 0 0 0 64 128 255 32 224
+        """
+
+        let points = try readPoints(fromASCII: ascii)
+        XCTAssertEqual(points.count, 1)
+        let point = try XCTUnwrap(points.first)
+        XCTAssertEqual(point.albedo.x, 64.0 / 255.0, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.y, 128.0 / 255.0, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.z, 255.0 / 255.0, accuracy: 1e-5)
+        XCTAssertEqual(point.metallic, 32.0 / 255.0, accuracy: 1e-5)
+        XCTAssertEqual(point.roughness, 224.0 / 255.0, accuracy: 1e-5)
+        let expectedNormal = SIMD3<Float>(0, 1, 0)
+        XCTAssertEqual(point.normal.x, expectedNormal.x, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.y, expectedNormal.y, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.z, expectedNormal.z, accuracy: 1e-5)
+    }
 }
 
 extension SplatScenePoint {
@@ -166,6 +315,10 @@ extension SplatScenePoint {
         static let opacity: Float = 1.0 / 256
         static let scale: Float = 1e-10
         static let rotation: Float = 2.0 / 128
+        static let albedo: Float = 1.0 / 256
+        static let metallic: Float = 1.0 / 255
+        static let roughness: Float = 1.0 / 255
+        static let normal: Float = 1e-6
     }
 
     public static func ~= (lhs: SplatScenePoint, rhs: SplatScenePoint) -> Bool {
@@ -173,7 +326,11 @@ extension SplatScenePoint {
         lhs.color ~= rhs.color &&
         lhs.opacity ~= rhs.opacity &&
         lhs.scale ~= rhs.scale &&
-        (lhs.rotation.normalized.vector - rhs.rotation.normalized.vector).isWithin(tolerance: Tolerance.rotation)
+        (lhs.rotation.normalized.vector - rhs.rotation.normalized.vector).isWithin(tolerance: Tolerance.rotation) &&
+        (lhs.albedo - rhs.albedo).isWithin(tolerance: Tolerance.albedo) &&
+        abs(lhs.metallic - rhs.metallic) <= Tolerance.metallic &&
+        abs(lhs.roughness - rhs.roughness) <= Tolerance.roughness &&
+        (lhs.normal - rhs.normal).isWithin(tolerance: Tolerance.normal)
     }
 }
 

@@ -1,5 +1,6 @@
 import Foundation
 import PLYIO
+import simd
 
 public class SplatPLYSceneReader: SplatSceneReader {
     enum Error: LocalizedError {
@@ -134,7 +135,18 @@ private struct ElementInputMapping {
         case linearUInt8(SIMD3<Int>)
     }
 
+    enum Albedo {
+        case float32(SIMD3<Int>)
+        case uint8(SIMD3<Int>)
+    }
+
+    enum UnitScalar {
+        case float32(Int)
+        case uint8(Int)
+    }
+
     static let sphericalHarmonicsCount = 45
+    static let float256Threshold: Float = 1.0 + 1e-4
 
     let elementTypeIndex: Int
 
@@ -150,6 +162,10 @@ private struct ElementInputMapping {
     let rotation1PropertyIndex: Int
     let rotation2PropertyIndex: Int
     let rotation3PropertyIndex: Int
+    let normalPropertyIndices: SIMD3<Int>?
+    let albedoPropertyIndices: Albedo?
+    let metallicPropertyIndex: UnitScalar?
+    let roughnessPropertyIndex: UnitScalar?
 
     static func elementMapping(for header: PLYHeader) throws -> ElementInputMapping {
         guard let elementTypeIndex = header.index(forElementNamed: SplatPLYConstants.ElementName.point.rawValue) else {
@@ -208,6 +224,46 @@ private struct ElementInputMapping {
         let rotation2PropertyIndex = try headerElement.index(forFloat32PropertyNamed: SplatPLYConstants.PropertyName.rotation2)
         let rotation3PropertyIndex = try headerElement.index(forFloat32PropertyNamed: SplatPLYConstants.PropertyName.rotation3)
 
+        let normalPropertyIndices: SIMD3<Int>?
+        if let normalXPropertyIndex = try headerElement.index(forOptionalFloat32PropertyNamed: SplatPLYConstants.PropertyName.normalX),
+           let normalYPropertyIndex = try headerElement.index(forOptionalFloat32PropertyNamed: SplatPLYConstants.PropertyName.normalY),
+           let normalZPropertyIndex = try headerElement.index(forOptionalFloat32PropertyNamed: SplatPLYConstants.PropertyName.normalZ) {
+            normalPropertyIndices = SIMD3(normalXPropertyIndex, normalYPropertyIndex, normalZPropertyIndex)
+        } else {
+            normalPropertyIndices = nil
+        }
+
+        let albedoPropertyIndices: Albedo?
+        if let albedoRFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoR, type: .float32),
+           let albedoGFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoG, type: .float32),
+           let albedoBFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoB, type: .float32) {
+            albedoPropertyIndices = .float32(SIMD3(albedoRFloatPropertyIndex, albedoGFloatPropertyIndex, albedoBFloatPropertyIndex))
+        } else if let albedoRUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoR, type: .uint8),
+                    let albedoGUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoG, type: .uint8),
+                    let albedoBUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoB, type: .uint8) {
+            albedoPropertyIndices = .uint8(SIMD3(albedoRUIntPropertyIndex, albedoGUIntPropertyIndex, albedoBUIntPropertyIndex))
+        } else {
+            albedoPropertyIndices = nil
+        }
+
+        let metallicPropertyIndex: UnitScalar?
+        if let metallicFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.metallic, type: .float32) {
+            metallicPropertyIndex = .float32(metallicFloatPropertyIndex)
+        } else if let metallicUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.metallic, type: .uint8) {
+            metallicPropertyIndex = .uint8(metallicUIntPropertyIndex)
+        } else {
+            metallicPropertyIndex = nil
+        }
+
+        let roughnessPropertyIndex: UnitScalar?
+        if let roughnessFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.roughness, type: .float32) {
+            roughnessPropertyIndex = .float32(roughnessFloatPropertyIndex)
+        } else if let roughnessUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.roughness, type: .uint8) {
+            roughnessPropertyIndex = .uint8(roughnessUIntPropertyIndex)
+        } else {
+            roughnessPropertyIndex = nil
+        }
+
         return ElementInputMapping(elementTypeIndex: elementTypeIndex,
                                    positionXPropertyIndex: positionXPropertyIndex,
                                    positionYPropertyIndex: positionYPropertyIndex,
@@ -220,7 +276,11 @@ private struct ElementInputMapping {
                                    rotation0PropertyIndex: rotation0PropertyIndex,
                                    rotation1PropertyIndex: rotation1PropertyIndex,
                                    rotation2PropertyIndex: rotation2PropertyIndex,
-                                   rotation3PropertyIndex: rotation3PropertyIndex)
+                                   rotation3PropertyIndex: rotation3PropertyIndex,
+                                   normalPropertyIndices: normalPropertyIndices,
+                                   albedoPropertyIndices: albedoPropertyIndices,
+                                   metallicPropertyIndex: metallicPropertyIndex,
+                                   roughnessPropertyIndex: roughnessPropertyIndex)
     }
 
     func apply(from element: PLYElement, to result: inout SplatScenePoint) throws {
@@ -254,6 +314,64 @@ private struct ElementInputMapping {
         result.rotation.imag.x = try element.float32Value(forPropertyIndex: rotation1PropertyIndex)
         result.rotation.imag.y = try element.float32Value(forPropertyIndex: rotation2PropertyIndex)
         result.rotation.imag.z = try element.float32Value(forPropertyIndex: rotation3PropertyIndex)
+
+        if let normalPropertyIndices {
+            result.setNormal(try element.normalizedVector(for: normalPropertyIndices))
+        } else {
+            result.setNormal(SplatScenePoint.defaultNormal)
+        }
+
+        if let albedoPropertyIndices {
+            switch albedoPropertyIndices {
+            case .float32(let propertyIndices):
+                let values = try element.float32Vector(forPropertyIndices: propertyIndices)
+                let maxComponent = max(values.x, max(values.y, values.z))
+                if maxComponent > ElementInputMapping.float256Threshold {
+                    result.setAlbedo(.linearFloat256(values))
+                } else {
+                    result.setAlbedo(.linearFloat(values))
+                }
+            case .uint8(let propertyIndices):
+                let values = try element.uint8Vector(forPropertyIndices: propertyIndices)
+                result.setAlbedo(.linearUInt8(values))
+            }
+        } else {
+            result.albedo = SplatScenePoint.defaultAlbedo
+        }
+
+        if let metallicPropertyIndex {
+            switch metallicPropertyIndex {
+            case .float32(let propertyIndex):
+                let value = try element.float32Value(forPropertyIndex: propertyIndex)
+                if value > ElementInputMapping.float256Threshold {
+                    result.setMetallic(.float256(value))
+                } else {
+                    result.setMetallic(.float(value))
+                }
+            case .uint8(let propertyIndex):
+                let value = try element.uint8Value(forPropertyIndex: propertyIndex)
+                result.setMetallic(.uint8(value))
+            }
+        } else {
+            result.metallic = SplatScenePoint.defaultMetallic
+        }
+
+        if let roughnessPropertyIndex {
+            switch roughnessPropertyIndex {
+            case .float32(let propertyIndex):
+                let value = try element.float32Value(forPropertyIndex: propertyIndex)
+                if value > ElementInputMapping.float256Threshold {
+                    result.setRoughness(.float256(value))
+                } else {
+                    result.setRoughness(.float(value))
+                }
+            case .uint8(let propertyIndex):
+                let value = try element.uint8Value(forPropertyIndex: propertyIndex)
+                result.setRoughness(.uint8(value))
+            }
+        } else {
+            result.roughness = SplatScenePoint.defaultRoughness
+        }
     }
 }
 
@@ -316,5 +434,26 @@ private extension PLYElement {
     func uint8Value(forPropertyIndex propertyIndex: Int) throws -> UInt8 {
         guard case .uint8(let typedValue) = properties[propertyIndex] else { throw SplatPLYSceneReader.Error.internalConsistency("Unexpected type for property at index \(propertyIndex)") }
         return typedValue
+    }
+
+    func float32Vector(forPropertyIndices propertyIndices: SIMD3<Int>) throws -> SIMD3<Float> {
+        SIMD3(x: try float32Value(forPropertyIndex: propertyIndices.x),
+              y: try float32Value(forPropertyIndex: propertyIndices.y),
+              z: try float32Value(forPropertyIndex: propertyIndices.z))
+    }
+
+    func uint8Vector(forPropertyIndices propertyIndices: SIMD3<Int>) throws -> SIMD3<UInt8> {
+        SIMD3(x: try uint8Value(forPropertyIndex: propertyIndices.x),
+              y: try uint8Value(forPropertyIndex: propertyIndices.y),
+              z: try uint8Value(forPropertyIndex: propertyIndices.z))
+    }
+
+    func normalizedVector(for propertyIndices: SIMD3<Int>) throws -> SIMD3<Float> {
+        let vector = try float32Vector(forPropertyIndices: propertyIndices)
+        let length = simd_length(vector)
+        if length > .leastNonzeroMagnitude {
+            return vector / length
+        }
+        return SplatScenePoint.defaultNormal
     }
 }

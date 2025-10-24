@@ -11,6 +11,10 @@ extension SplatScenePoint: CustomStringConvertible {
         components += [ "opacity:\(opacity.description)" ]
         components += [ "scale:\(scale.description)" ]
         components += [ "rotation:(ix = \(rotation.imag.x), iy = \(rotation.imag.y), iz = \(rotation.imag.z), r = \(rotation.real))" ]
+        components += [ "albedo:(\(albedo.x), \(albedo.y), \(albedo.z))" ]
+        components += [ "metallic:\(metallic)" ]
+        components += [ "roughness:\(roughness)" ]
+        components += [ "normal:(\(normal.x), \(normal.y), \(normal.z))" ]
 
         return components.joined(separator: " ")
     }

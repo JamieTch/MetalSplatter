@@ -21,6 +21,16 @@ You're right, the documentation is entirely missing; it's a major TODO list item
 5. Run
 6. Note: framerate will be better if you run without the debugger attached (hit Stop in Xcode, and go run from the app from the Home screen)
 
+### Inspecting loaded splats
+
+Use the converter’s describe mode to inspect the materials parsed from a PLY:
+
+```
+swift run SplatConverter --describe --start 0 --count 5 path/to/gaussian.ply
+```
+
+The output lists each splat’s position, SH color, albedo, metallic, roughness, and normal values so you can confirm that GIR-style exports are parsed as expected.
+
 ## Showcase: apps and projects using MetalSplatter
 
 * The [MetalSplatter viewer](https://apps.apple.com/us/app/metalsplatter/id6476895334) is a simple, official Vision Pro app based on this library. This is different from the minimal included sample app (for instance, it has camera controls and a splat gallery). Confusingly, both the (open source) library and (non-open-source) app are called MetalSplatter, and both are by [scier](https://github.com/scier).
