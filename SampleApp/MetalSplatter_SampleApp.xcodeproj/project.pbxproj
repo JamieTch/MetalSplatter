@@ -23,8 +23,9 @@
 		61791E022B415D3F00302B57 /* SampleBoxRenderer in Frameworks */ = {isa = PBXBuildFile; productRef = 61791E012B415D3F00302B57 /* SampleBoxRenderer */; };
 		61791E102B41688000302B57 /* MetalKitSceneRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */; };
 		61791E132B416DD700302B57 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E112B416DCF00302B57 /* Constants.swift */; };
-		61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
-		61F9C1A42C12345600AAA111 /* SceneInteractionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */; };
+                61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
+                61F9C1A42C12345600AAA111 /* SceneInteractionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */; };
+                61F9C1A62C12345600AAA112 /* TwoHandGestureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F9C1A52C12345600AAA112 /* TwoHandGestureController.swift */; };
 		617E50C92B314C4800F99766 /* PLYIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50C82B314C4800F99766 /* PLYIO */; };
 		617E50CB2B314C4800F99766 /* SplatIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50CA2B314C4800F99766 /* SplatIO */; };
 /* End PBXBuildFile section */
@@ -45,8 +46,9 @@
 		61791E0C2B41683500302B57 /* VisionSceneRenderer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = VisionSceneRenderer.swift; sourceTree = "<group>"; };
 		61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MetalKitSceneRenderer.swift; sourceTree = "<group>"; };
 		61791E112B416DCF00302B57 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
-		61791E142B42294700302B57 /* MetalKitSceneView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MetalKitSceneView.swift; sourceTree = "<group>"; };
-		61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneInteractionState.swift; sourceTree = "<group>"; };
+                61791E142B42294700302B57 /* MetalKitSceneView.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MetalKitSceneView.swift; sourceTree = "<group>"; };
+                61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneInteractionState.swift; sourceTree = "<group>"; };
+                61F9C1A52C12345600AAA112 /* TwoHandGestureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TwoHandGestureController.swift; sourceTree = "<group>"; };
 		617E50B02B314BE200F99766 /* MetalSplatter SampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MetalSplatter SampleApp.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -84,9 +86,10 @@
 				610347D82B46861E00693CE3 /* ContentStageConfiguration.swift */,
 				61791DF72B41551F00302B57 /* ContentView.swift */,
                                 61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */,
-                		61791E142B42294700302B57 /* MetalKitSceneView.swift */,
+                                61791E142B42294700302B57 /* MetalKitSceneView.swift */,
                                 61791E0C2B41683500302B57 /* VisionSceneRenderer.swift */,
-                		61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */,
+                                61F9C1A22C12345600AAA111 /* SceneInteractionState.swift */,
+                                61F9C1A52C12345600AAA112 /* TwoHandGestureController.swift */,
                         );
 			path = Scene;
 			sourceTree = "<group>";
@@ -224,7 +227,8 @@
 				61791DE02B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift in Sources */,
 				147AFBD02E33ED730052B2AD /* CameraController.swift in Sources */,
                                 147AFBD12E33ED730052B2AD /* InteractiveMTKView.swift in Sources */,
-                		61F9C1A42C12345600AAA111 /* SceneInteractionState.swift in Sources */,
+                                61F9C1A42C12345600AAA111 /* SceneInteractionState.swift in Sources */,
+                                61F9C1A62C12345600AAA112 /* TwoHandGestureController.swift in Sources */,
                                 61791DE82B4154FB00302B57 /* ModelRenderer.swift in Sources */,
 				61791DCF2B41544300302B57 /* Assets.xcassets in Sources */,
 				61791E132B416DD700302B57 /* Constants.swift in Sources */,

@@ -10,6 +10,18 @@ final class SceneInteractionState {
         var scale: Float = 1.0
     }
 
+    struct Update {
+        var translation: SIMD3<Float>
+        var rotation: simd_quatf
+        var scale: Float
+
+        init(translation: SIMD3<Float>, rotation: simd_quatf, scale: Float) {
+            self.translation = translation
+            self.rotation = rotation
+            self.scale = scale
+        }
+    }
+
     private let scaleRange: ClosedRange<Float>
     private let lock: OSAllocatedUnfairLock<Values>
 
@@ -31,6 +43,15 @@ final class SceneInteractionState {
             body(&values)
             values.rotation = values.rotation.normalized
             values.scale = SceneInteractionState.clamp(values.scale, to: scaleRange)
+            assert(scaleRange.contains(values.scale))
+        }
+    }
+
+    func update(_ update: Update) {
+        lock.withLock { values in
+            values.translation = update.translation
+            values.rotation = update.rotation.normalized
+            values.scale = SceneInteractionState.clamp(update.scale, to: scaleRange)
             assert(scaleRange.contains(values.scale))
         }
     }
