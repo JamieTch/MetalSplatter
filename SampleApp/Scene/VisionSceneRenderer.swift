@@ -1,5 +1,6 @@
 #if os(visionOS)
 
+import ARKit
 import CompositorServices
 import Metal
 import MetalSplatter
@@ -33,6 +34,10 @@ class VisionSceneRenderer {
 
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
+    let handTracking: HandTrackingProvider
+
+    private lazy var twoHandGestureController = TwoHandGestureController(interactionState: interactionState,
+                                                                         log: Self.log)
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -40,6 +45,7 @@ class VisionSceneRenderer {
         self.commandQueue = self.device.makeCommandQueue()!
 
         worldTracking = WorldTrackingProvider()
+        handTracking = HandTrackingProvider()
         arSession = ARKitSession()
         interactionState.update { values in
             values.translation = SIMD3<Float>(0.0, 0.0, Constants.modelCenterZ)
@@ -75,10 +81,44 @@ class VisionSceneRenderer {
 
     func startRenderLoop() {
         Task {
+            var providers: [any DataProvider] = [worldTracking]
+
+            if HandTrackingProvider.isSupported {
+                do {
+                    let status = try await handTracking.requestAuthorization()
+                    switch status {
+                    case .authorized, .notDetermined:
+                        providers.append(handTracking)
+                        Self.log.debug("Hand tracking authorized")
+                    case .denied, .restricted:
+                        Self.log.warning("Hand tracking authorization denied")
+                    @unknown default:
+                        Self.log.error("Unexpected hand tracking authorization status")
+                    }
+                } catch {
+                    Self.log.error("Hand tracking authorization failed: \(error.localizedDescription)")
+                }
+            } else {
+                Self.log.info("Hand tracking not supported on this device")
+            }
+
             do {
-                try await arSession.run([worldTracking])
+                try await arSession.run(providers)
             } catch {
-                fatalError("Failed to initialize ARSession")
+                if providers.contains(where: { $0 is HandTrackingProvider }) {
+                    Self.log.error("ARSession failed to start with hand tracking: \(error.localizedDescription)")
+                    do {
+                        try await arSession.run([worldTracking])
+                    } catch {
+                        fatalError("Failed to initialize ARSession")
+                    }
+                } else {
+                    fatalError("Failed to initialize ARSession")
+                }
+            }
+
+            Task { [weak self] in
+                await self?.eventLoop()
             }
 
             let renderThread = Thread {
@@ -87,6 +127,31 @@ class VisionSceneRenderer {
             renderThread.name = "Render Thread"
             renderThread.start()
         }
+    }
+
+    private func eventLoop() async {
+        for await event in layerRenderer.eventQueue {
+            guard case .spatial(let collection) = event else { continue }
+            if !processTwoHandPinchEvents(collection) {
+                processFallbackPinch()
+            }
+        }
+    }
+
+    @discardableResult
+    private func processTwoHandPinchEvents(_ collection: SpatialEventCollection) -> Bool {
+        var handled = false
+        for pinch in collection.twoHandPinch {
+            handled = true
+            twoHandGestureController.handleTwoHandPinch(pinch)
+        }
+        return handled
+    }
+
+    private func processFallbackPinch() {
+        guard HandTrackingProvider.isSupported else { return }
+        let anchors = handTracking.handAnchors
+        twoHandGestureController.updateFromAnchors(anchors)
     }
 
     private func viewports(drawable: LayerRenderer.Drawable, deviceAnchor: DeviceAnchor?) -> [ModelRendererViewportDescriptor] {
