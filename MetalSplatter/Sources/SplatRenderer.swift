@@ -107,8 +107,31 @@ public class SplatRenderer {
         return sanitized
     }
 
+    private static func sanitizeQuaternion(_ quaternion: simd_quatf, pointIndex: Int) -> simd_quatf {
+        let vector = quaternion.vector
+        guard vector.x.isFinite, vector.y.isFinite, vector.z.isFinite, vector.w.isFinite else {
+            log.error("Non-finite rotation for splat index \(pointIndex, privacy: .public); using identity quaternion")
+            return simd_quatf()
+        }
+
+        let lengthSquared = simd_length_squared(vector)
+        guard lengthSquared.isFinite, lengthSquared > .leastNonzeroMagnitude else {
+            log.error("Invalid rotation magnitude for splat index \(pointIndex, privacy: .public); using identity quaternion")
+            return simd_quatf()
+        }
+
+        return simd_normalize(quaternion)
+    }
+
     private static func packHalf3(_ vector: SIMD3<Float>) -> PackedHalf3 {
         PackedHalf3(x: Float16(vector.x), y: Float16(vector.y), z: Float16(vector.z))
+    }
+
+    private static func packHalf4(_ vector: SIMD4<Float>) -> PackedHalf4 {
+        PackedHalf4(x: Float16(vector.x),
+                    y: Float16(vector.y),
+                    z: Float16(vector.z),
+                    w: Float16(vector.w))
     }
 
     private static func makeFallbackEnvironmentMap(device: MTLDevice) -> MTLTexture {
@@ -213,9 +236,12 @@ public class SplatRenderer {
         var projectionMatrix: matrix_float4x4
         var viewMatrix: matrix_float4x4
         var screenSize: SIMD2<UInt32> // Size of screen in pixels
+        var screenPadding: SIMD2<UInt32> = .zero
+        var cameraPosition: SIMD4<Float>
 
         var splatCount: UInt32
         var indexedSplatCount: UInt32
+        var paddingCounts: SIMD2<UInt32> = .zero
     }
 
     // Keep in sync with Shaders.metal : UniformsArray
@@ -242,6 +268,13 @@ public class SplatRenderer {
         var z: Float16
     }
 
+    struct PackedHalf4 {
+        var x: Float16
+        var y: Float16
+        var z: Float16
+        var w: Float16
+    }
+
     struct PackedRGBHalf4 {
         var r: Float16
         var g: Float16
@@ -259,6 +292,7 @@ public class SplatRenderer {
         var metallic: Float16
         var roughness: Float16
         var normal: PackedHalf3
+        var rotation: PackedHalf4
     }
 
     struct SplatIndexAndDepth {
@@ -644,9 +678,11 @@ public class SplatRenderer {
                                 splatCount: UInt32,
                                 indexedSplatCount: UInt32) {
         for (i, viewport) in viewports.enumerated() where i <= maxViewCount {
+            let cameraPosition = Self.cameraWorldPosition(forViewMatrix: viewport.viewMatrix)
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
                                     viewMatrix: viewport.viewMatrix,
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
+                                    cameraPosition: SIMD4<Float>(cameraPosition, 1),
                                     splatCount: splatCount,
                                     indexedSplatCount: indexedSplatCount)
             self.uniforms.pointee.setUniforms(index: i, uniforms)
@@ -813,6 +849,7 @@ public class SplatRenderer {
             renderEncoder.setRenderPipelineState(postprocessPipelineState)
             renderEncoder.setDepthStencilState(postprocessDepthState)
             renderEncoder.setCullMode(.none)
+            bindMaterialResources(to: renderEncoder)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             renderEncoder.popDebugGroup()
         } else {
@@ -900,7 +937,8 @@ extension SplatRenderer.Splat {
          roughness: Float,
          normal: SIMD3<Float>,
          pointIndex: Int) {
-        let transform = simd_float3x3(rotation) * simd_float3x3(diagonal: scale)
+        let sanitizedRotation = SplatRenderer.sanitizeQuaternion(rotation, pointIndex: pointIndex)
+        let transform = simd_float3x3(sanitizedRotation) * simd_float3x3(diagonal: scale)
         let cov3D = transform * transform.transpose
 
         let sanitizedColor = SplatRenderer.sanitizeColor(color, pointIndex: pointIndex)
@@ -937,6 +975,7 @@ extension SplatRenderer.Splat {
         self.metallic = Float16(sanitizedMetallic)
         self.roughness = Float16(sanitizedRoughness)
         self.normal = SplatRenderer.packHalf3(sanitizedNormal)
+        self.rotation = SplatRenderer.packHalf4(sanitizedRotation.vector)
     }
 }
 

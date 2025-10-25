@@ -1,5 +1,80 @@
 #import "SplatProcessing.h"
 
+float4 normalizeQuaternion(float4 quaternion) {
+    float lengthSquared = dot(quaternion, quaternion);
+    if (!isfinite(lengthSquared) || lengthSquared <= 0) {
+        return float4(0, 0, 0, 1);
+    }
+    float length = sqrt(lengthSquared);
+    return quaternion / length;
+}
+
+float3 rotateVectorByQuaternion(float4 quaternion, float3 vector) {
+    float4 normalizedQuaternion = normalizeQuaternion(quaternion);
+    float3 qVec = normalizedQuaternion.xyz;
+    float qW = normalizedQuaternion.w;
+    float3 t = 2.0 * cross(qVec, vector);
+    return vector + qW * t + cross(qVec, t);
+}
+
+float3 safeNormalize(float3 value, float3 fallback) {
+    float lengthSquared = dot(value, value);
+    if (!isfinite(lengthSquared) || lengthSquared <= 0) {
+        return fallback;
+    }
+    return normalize(value);
+}
+
+half computeAmbientOcclusion(half opacity) {
+    half clampedOpacity = clamp(opacity, half(0), half(1));
+    return half(1) - half(fast::exp(-float(clampedOpacity)));
+}
+
+float3 sampleDiffuseIrradiance(texturecube<half> environmentMap,
+                               sampler environmentSampler,
+                               float3 normal) {
+    uint mipCount = environmentMap.get_num_mip_levels();
+    uint diffuseMip = mipCount == 0 ? 0 : mipCount - 1;
+    return float3(environmentMap.sample(environmentSampler, normal, level(float(diffuseMip))).rgb);
+}
+
+half3 shadeGaussian(half3 albedo,
+                    half metallic,
+                    half roughness,
+                    half3 normal,
+                    half3 viewDirection,
+                    half ambientOcclusion,
+                    texturecube<half> environmentMap,
+                    texture2d<half> brdfLUT,
+                    sampler environmentSampler,
+                    sampler brdfSampler) {
+    float3 N = safeNormalize(float3(normal), float3(0, 0, 1));
+    float3 V = safeNormalize(float3(viewDirection), float3(0, 0, 1));
+    float perceptualRoughness = clamp(float(roughness), 0.045, 1.0);
+    float3 R = reflect(-V, N);
+    uint mipCount = environmentMap.get_num_mip_levels();
+    float lod = perceptualRoughness * float(max(int(mipCount) - 1, 0));
+    float3 prefilteredColor = float3(environmentMap.sample(environmentSampler, R, level(lod)).rgb);
+    float3 irradiance = sampleDiffuseIrradiance(environmentMap, environmentSampler, N);
+
+    float NdotV = clamp(dot(N, V), 1e-4, 1.0);
+    float3 baseAlbedo = float3(albedo);
+    float metallicValue = clamp(float(metallic), 0.0, 1.0);
+    float3 F0 = mix(float3(0.04), baseAlbedo, metallicValue);
+    float Fc = pow(1.0 - NdotV, 5.0);
+    float3 F = F0 + (1.0 - F0) * Fc;
+
+    float3 kS = F;
+    float3 kD = (float3(1.0) - kS) * (1.0 - metallicValue);
+
+    float2 brdfSample = float2(brdfLUT.sample(brdfSampler, float2(NdotV, perceptualRoughness)).rg);
+    float3 specular = prefilteredColor * (F0 * brdfSample.x + brdfSample.y);
+
+    float3 diffuse = irradiance * baseAlbedo * kD;
+    float3 color = (diffuse + specular) * float(clamp(ambientOcclusion, half(0), half(1)));
+    return half3(color);
+}
+
 float3 calcCovariance2D(float3 viewPos,
                         packed_half3 cov3Da,
                         packed_half3 cov3Db,
@@ -104,6 +179,8 @@ FragmentIn splatVertex(Splat splat,
         out.metallic = half(0);
         out.roughness = half(0);
         out.normal = half3(0);
+        out.worldPosition = float3(0);
+        out.viewDirection = float3(0);
         return out;
     }
 
@@ -125,7 +202,17 @@ FragmentIn splatVertex(Splat splat,
     out.albedo = half3(splat.albedo);
     out.metallic = splat.metallic;
     out.roughness = splat.roughness;
-    out.normal = half3(splat.normal);
+
+    float3 worldPosition = float3(splat.position);
+    float3 normal = safeNormalize(float3(splat.normal), float3(0, 0, 1));
+    float4 rotation = float4(splat.rotation);
+    float3 rotatedNormal = safeNormalize(rotateVectorByQuaternion(rotation, normal), float3(0, 0, 1));
+    out.normal = half3(rotatedNormal);
+    out.worldPosition = worldPosition;
+
+    float3 cameraPosition = uniforms.cameraPosition.xyz;
+    float3 viewDirection = safeNormalize(cameraPosition - worldPosition, float3(0, 0, 1));
+    out.viewDirection = viewDirection;
     return out;
 }
 

@@ -2,7 +2,10 @@
 
 typedef struct
 {
-    half4 color [[raster_order_group(0)]];
+    half4 albedoMetallic [[raster_order_group(0)]];
+    half4 normalRoughness [[raster_order_group(0)]];
+    half4 viewAlpha [[raster_order_group(0)]];
+    half2 ambientOcclusion [[raster_order_group(0)]];
     float depth [[raster_order_group(0)]];
 } FragmentValues;
 
@@ -20,7 +23,10 @@ typedef struct
 kernel void initializeFragmentStore(imageblock<FragmentValues, imageblock_layout_explicit> blockData,
                                     ushort2 localThreadID [[thread_position_in_threadgroup]]) {
     threadgroup_imageblock FragmentValues *values = blockData.data(localThreadID);
-    values->color = { 0, 0, 0, 0 };
+    values->albedoMetallic = half4(0);
+    values->normalRoughness = half4(0);
+    values->viewAlpha = half4(0);
+    values->ambientOcclusion = half2(0);
     values->depth = 0;
 }
 
@@ -41,6 +47,8 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.metallic = half(0);
         out.roughness = half(0);
         out.normal = half3(0);
+        out.worldPosition = float3(0);
+        out.viewDirection = float3(0);
         return out;
     }
 
@@ -54,16 +62,26 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
     FragmentStore out;
 
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a);
-    half4 colorWithPremultipliedAlpha = half4(in.color.rgb * alpha, alpha);
+    if (alpha <= 0) {
+        out.values = previousFragmentValues;
+        return out;
+    }
 
     half oneMinusAlpha = 1 - alpha;
+    half ao = computeAmbientOcclusion(in.color.a);
 
-    half4 previousColor = previousFragmentValues.color;
-    out.values.color = previousColor * oneMinusAlpha + colorWithPremultipliedAlpha;
+    half4 albedoMetallic = half4(in.albedo * alpha, in.metallic * alpha);
+    half4 normalRoughness = half4(in.normal * alpha, in.roughness * alpha);
+    half4 viewAlpha = half4(half3(in.viewDirection) * alpha, alpha);
+    half2 ambientOcclusion = half2(ao * alpha, 0);
 
-    float previousDepth = previousFragmentValues.depth;
+    out.values.albedoMetallic = previousFragmentValues.albedoMetallic * oneMinusAlpha + albedoMetallic;
+    out.values.normalRoughness = previousFragmentValues.normalRoughness * oneMinusAlpha + normalRoughness;
+    out.values.viewAlpha = previousFragmentValues.viewAlpha * oneMinusAlpha + viewAlpha;
+    out.values.ambientOcclusion = previousFragmentValues.ambientOcclusion * oneMinusAlpha + ambientOcclusion;
+
     float depth = in.position.z;
-    out.values.depth = previousDepth * oneMinusAlpha + depth * alpha;
+    out.values.depth = previousFragmentValues.depth * oneMinusAlpha + depth * alpha;
 
     return out;
 }
@@ -84,16 +102,67 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     out.metallic = half(0);
     out.roughness = half(0);
     out.normal = half3(0);
+    out.worldPosition = float3(0);
+    out.viewDirection = float3(0);
     return out;
 }
 
-fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]]) {
+inline half4 resolveFragmentValues(FragmentValues fragmentValues,
+                                   texturecube<half> environmentMap,
+                                   texture2d<half> brdfLUT,
+                                   sampler environmentSampler,
+                                   sampler brdfSampler) {
+    half accumulatedAlpha = fragmentValues.viewAlpha.w;
+    if (accumulatedAlpha <= 0) {
+        return half4(0);
+    }
+
+    half invAlpha = half(1.0) / accumulatedAlpha;
+    half3 albedo = half3(fragmentValues.albedoMetallic.xyz * invAlpha);
+    half metallic = fragmentValues.albedoMetallic.w * invAlpha;
+    half3 normal = half3(fragmentValues.normalRoughness.xyz * invAlpha);
+    half roughness = fragmentValues.normalRoughness.w * invAlpha;
+    half3 viewDirection = half3(fragmentValues.viewAlpha.xyz * invAlpha);
+    half ao = fragmentValues.ambientOcclusion.x * invAlpha;
+
+    half3 shaded = shadeGaussian(albedo,
+                                 metallic,
+                                 roughness,
+                                 normal,
+                                 viewDirection,
+                                 ao,
+                                 environmentMap,
+                                 brdfLUT,
+                                 environmentSampler,
+                                 brdfSampler);
+
+    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+}
+
+fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
+                                               texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
+                                               texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
+                                               sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
+                                               sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
     FragmentOut out;
-    out.depth = (fragmentValues.color.a == 0) ? 0 : fragmentValues.depth / fragmentValues.color.a;
-    out.color = fragmentValues.color;
+    half accumulatedAlpha = fragmentValues.viewAlpha.w;
+    out.depth = (accumulatedAlpha == 0) ? 0 : fragmentValues.depth / accumulatedAlpha;
+    out.color = resolveFragmentValues(fragmentValues,
+                                      environmentMap,
+                                      brdfLUT,
+                                      environmentSampler,
+                                      brdfSampler);
     return out;
 }
 
-fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[imageblock_data]]) {
-    return fragmentValues.color;
+fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[imageblock_data]],
+                                               texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
+                                               texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
+                                               sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
+                                               sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
+    return resolveFragmentValues(fragmentValues,
+                                 environmentMap,
+                                 brdfLUT,
+                                 environmentSampler,
+                                 brdfSampler);
 }

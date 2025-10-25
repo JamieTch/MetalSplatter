@@ -14,3 +14,16 @@ FragmentIn splatVertex(Splat splat,
                        uint relativeVertexIndex);
 
 half splatFragmentAlpha(half2 relativePosition, half splatAlpha);
+
+half computeAmbientOcclusion(half opacity);
+
+half3 shadeGaussian(half3 albedo,
+                    half metallic,
+                    half roughness,
+                    half3 normal,
+                    half3 viewDirection,
+                    half ambientOcclusion,
+                    texturecube<half> environmentMap,
+                    texture2d<half> brdfLUT,
+                    sampler environmentSampler,
+                    sampler brdfSampler);
