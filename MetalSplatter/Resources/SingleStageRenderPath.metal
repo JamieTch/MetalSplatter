@@ -17,6 +17,8 @@ vertex FragmentIn singleStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.metallic = half(0);
         out.roughness = half(0);
         out.normal = half3(0);
+        out.worldPosition = float3(0);
+        out.viewDirection = float3(0);
         return out;
     }
 
@@ -25,7 +27,27 @@ vertex FragmentIn singleStageSplatVertexShader(uint vertexID [[vertex_id]],
     return splatVertex(splat, uniforms, vertexID % 4);
 }
 
-fragment half4 singleStageSplatFragmentShader(FragmentIn in [[stage_in]]) {
+fragment half4 singleStageSplatFragmentShader(FragmentIn in [[stage_in]],
+                                             texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
+                                             texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
+                                             sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
+                                             sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a);
-    return half4(alpha * in.color.rgb, alpha);
+    if (alpha <= 0) {
+        return half4(0);
+    }
+
+    half ao = computeAmbientOcclusion(in.color.a);
+    half3 shaded = shadeGaussian(in.albedo,
+                                 in.metallic,
+                                 in.roughness,
+                                 in.normal,
+                                 half3(in.viewDirection),
+                                 ao,
+                                 environmentMap,
+                                 brdfLUT,
+                                 environmentSampler,
+                                 brdfSampler);
+
+    return half4(shaded * alpha, alpha);
 }

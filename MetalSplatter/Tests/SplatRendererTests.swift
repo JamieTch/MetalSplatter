@@ -29,6 +29,10 @@ final class SplatRendererPackingTests: XCTestCase {
         XCTAssertEqual(Float(splat.normal.y), 1, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.normal.z), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.a), 0.8, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.x), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.y), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.z), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.w), 1, accuracy: 1e-3)
     }
 
     func testInvalidMaterialValuesFallBackToDefaults() {
@@ -56,6 +60,22 @@ final class SplatRendererPackingTests: XCTestCase {
         XCTAssertEqual(Float(splat.color.y), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.z), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.a), 0, accuracy: 1e-3)
+    }
+
+    func testInvalidRotationFallsBackToIdentity() {
+        var point = SplatScenePoint(position: .zero,
+                                    color: .linearFloat(SIMD3<Float>(repeating: 0.5)),
+                                    opacity: .linearFloat(0.5),
+                                    scale: .linearFloat(SIMD3<Float>(repeating: 1)),
+                                    rotation: simd_quatf())
+        point.rotation = simd_quatf(vector: SIMD4<Float>(repeating: .nan))
+
+        let splat = SplatRenderer.Splat(point, index: 3)
+
+        XCTAssertEqual(Float(splat.rotation.x), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.y), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.z), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.rotation.w), 1, accuracy: 1e-3)
     }
 
     func testSplatStrideMatchesSize() throws {
@@ -94,6 +114,37 @@ final class SplatRendererPackingTests: XCTestCase {
                 return
             }
             XCTAssertEqual(resource, "environmentMap")
+        }
+    }
+
+    func testRejectsInvalidBRDFTextureType() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal device unavailable in test environment")
+        }
+
+        let renderer = try SplatRenderer(device: device,
+                                         colorFormat: .bgra8Unorm,
+                                         depthFormat: .invalid,
+                                         sampleCount: 1,
+                                         maxViewCount: 1,
+                                         maxSimultaneousRenders: 1)
+
+        let descriptor = MTLTextureDescriptor.textureCubeDescriptor(pixelFormat: .rg16Float,
+                                                                    size: 1,
+                                                                    mipmapped: false)
+        descriptor.usage = [.shaderRead]
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            XCTFail("Failed to allocate test texture")
+            return
+        }
+
+        XCTAssertThrowsError(try renderer.setBRDFLookupTexture(texture)) { error in
+            guard case SplatRenderer.Error.invalidMaterialResource(let resource, _) = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+            XCTAssertEqual(resource, "brdfLUT")
         }
     }
 }

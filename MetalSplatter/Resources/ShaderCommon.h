@@ -30,6 +30,8 @@ typedef struct
     matrix_float4x4 projectionMatrix;
     matrix_float4x4 viewMatrix;
     uint2 screenSize;
+    uint2 _paddingScreen;
+    float4 cameraPosition;
 
     /*
      The first N splats are represented as as 2N primitives and 4N vertex indices. The remained are represented
@@ -38,6 +40,7 @@ typedef struct
      */
     uint splatCount;
     uint indexedSplatCount;
+    uint2 _paddingCounts;
 } Uniforms;
 
 typedef struct
@@ -55,6 +58,7 @@ typedef struct
     half          metallic;
     half          roughness;
     packed_half3 normal;
+    packed_half4 rotation;
 } Splat;
 
 typedef struct
@@ -66,4 +70,6 @@ typedef struct
     half metallic;
     half roughness;
     half3 normal;
+    float3 worldPosition;
+    float3 viewDirection;
 } FragmentIn;
