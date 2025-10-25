@@ -98,6 +98,12 @@ FragmentIn splatVertex(Splat splat,
         projectedCenter.y < -bounds ||
         projectedCenter.y > bounds) {
         out.position = float4(1, 1, 0, 1);
+        out.relativePosition = half2(0);
+        out.color = half4(0);
+        out.albedo = half3(0);
+        out.metallic = half(0);
+        out.roughness = half(0);
+        out.normal = half3(0);
         return out;
     }
 
@@ -116,6 +122,10 @@ FragmentIn splatVertex(Splat splat,
                           projectedCenter.w);
     out.relativePosition = kBoundsRadius * relativeCoordinates;
     out.color = splat.color;
+    out.albedo = half3(splat.albedo);
+    out.metallic = splat.metallic;
+    out.roughness = splat.roughness;
+    out.normal = half3(splat.normal);
     return out;
 }
 

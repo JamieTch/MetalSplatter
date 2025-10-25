@@ -1,0 +1,100 @@
+#if canImport(Metal)
+import Metal
+import MetalKit
+import simd
+import XCTest
+@testable import MetalSplatter
+import SplatIO
+
+final class SplatRendererPackingTests: XCTestCase {
+    func testSplatPacksMaterialProperties() {
+        let point = SplatScenePoint(position: SIMD3<Float>(1, 2, 3),
+                                    color: .linearFloat(SIMD3<Float>(0.25, 0.5, 0.75)),
+                                    opacity: .linearFloat(0.8),
+                                    scale: .linearFloat(SIMD3<Float>(repeating: 1)),
+                                    rotation: simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1)),
+                                    albedo: SIMD3<Float>(0.2, 0.4, 0.6),
+                                    metallic: 0.3,
+                                    roughness: 0.7,
+                                    normal: SIMD3<Float>(0, 1, 0))
+
+        let splat = SplatRenderer.Splat(point, index: 0)
+
+        XCTAssertEqual(Float(splat.albedo.x), 0.2, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.albedo.y), 0.4, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.albedo.z), 0.6, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.metallic), 0.3, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.roughness), 0.7, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.x), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.y), 1, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.z), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.color.a), 0.8, accuracy: 1e-3)
+    }
+
+    func testInvalidMaterialValuesFallBackToDefaults() {
+        var point = SplatScenePoint(position: .zero,
+                                    color: .linearFloat(SIMD3<Float>(Float.nan, Float.nan, Float.nan)),
+                                    opacity: .linearFloat(Float.nan),
+                                    scale: .linearFloat(SIMD3<Float>(repeating: 1)),
+                                    rotation: simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1)))
+        point.albedo = SIMD3<Float>(repeating: .nan)
+        point.metallic = .nan
+        point.roughness = .nan
+        point.normal = SIMD3<Float>(repeating: .nan)
+
+        let splat = SplatRenderer.Splat(point, index: 5)
+
+        XCTAssertEqual(Float(splat.albedo.x), SplatScenePoint.defaultAlbedo.x, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.albedo.y), SplatScenePoint.defaultAlbedo.y, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.albedo.z), SplatScenePoint.defaultAlbedo.z, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.metallic), SplatScenePoint.defaultMetallic, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.roughness), SplatScenePoint.defaultRoughness, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.x), SplatScenePoint.defaultNormal.x, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.y), SplatScenePoint.defaultNormal.y, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.z), SplatScenePoint.defaultNormal.z, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.color.x), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.color.y), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.color.z), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.color.a), 0, accuracy: 1e-3)
+    }
+
+    func testSplatStrideMatchesSize() throws {
+        #if arch(x86_64)
+        throw XCTSkip("Float16 layout assertions are skipped on x86_64")
+        #else
+        XCTAssertEqual(MemoryLayout<SplatRenderer.Splat>.stride, MemoryLayout<SplatRenderer.Splat>.size)
+        #endif
+    }
+
+    func testRejectsInvalidEnvironmentTextureType() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal device unavailable in test environment")
+        }
+
+        let renderer = try SplatRenderer(device: device,
+                                         colorFormat: .bgra8Unorm,
+                                         depthFormat: .invalid,
+                                         sampleCount: 1,
+                                         maxViewCount: 1,
+                                         maxSimultaneousRenders: 1)
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
+                                                                   width: 1,
+                                                                   height: 1,
+                                                                   mipmapped: false)
+        descriptor.usage = [.shaderRead]
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            XCTFail("Failed to allocate test texture")
+            return
+        }
+
+        XCTAssertThrowsError(try renderer.setEnvironmentMap(texture)) { error in
+            guard case SplatRenderer.Error.invalidMaterialResource(let resource, _) = error else {
+                XCTFail("Unexpected error: \(error)")
+                return
+            }
+            XCTAssertEqual(resource, "environmentMap")
+        }
+    }
+}
+#endif
