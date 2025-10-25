@@ -35,6 +35,12 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
     if (splatID >= uniforms.splatCount) {
         FragmentIn out;
         out.position = float4(1, 1, 0, 1);
+        out.relativePosition = half2(0);
+        out.color = half4(0);
+        out.albedo = half3(0);
+        out.metallic = half(0);
+        out.roughness = half(0);
+        out.normal = half3(0);
         return out;
     }
 
@@ -72,6 +78,12 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     position.zw = 1.0;
 
     out.position = position;
+    out.relativePosition = half2(0);
+    out.color = half4(0);
+    out.albedo = half3(0);
+    out.metallic = half(0);
+    out.roughness = half(0);
+    out.normal = half3(0);
     return out;
 }
 

@@ -67,6 +67,12 @@ let package = Package(
             sources: [ "Sources" ],
             resources: [ .process("Resources") ]
         ),
+        .testTarget(
+            name: "MetalSplatterTests",
+            dependencies: [ "MetalSplatter", "SplatIO" ],
+            path: "MetalSplatter",
+            sources: [ "Tests" ]
+        ),
         .target(
             name: "SampleBoxRenderer",
             path: "SampleBoxRenderer",

@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import MetalKit
 import os
+import simd
 import SplatIO
 
 #if arch(x86_64)
@@ -31,6 +32,150 @@ public class SplatRenderer {
         Logger(subsystem: Bundle.module.bundleIdentifier!,
                category: "SplatRenderer")
 
+    public enum Error: Swift.Error, LocalizedError {
+        case invalidMaterialResource(resource: String, reason: String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .invalidMaterialResource(let resource, let reason):
+                return "Invalid material resource for \(resource): \(reason)"
+            }
+        }
+    }
+
+    private static func sanitizeScalar(_ value: Float,
+                                       defaultValue: Float,
+                                       field: String,
+                                       pointIndex: Int) -> Float {
+        guard value.isFinite else {
+            log.error("Non-finite \(field, privacy: .public) for splat index \(pointIndex, privacy: .public); using default \(defaultValue, privacy: .public)")
+            return defaultValue
+        }
+        return value
+    }
+
+    private static func sanitizeUnitScalar(_ value: Float,
+                                           defaultValue: Float,
+                                           field: String,
+                                           pointIndex: Int) -> Float {
+        let sanitized = sanitizeScalar(value, defaultValue: defaultValue, field: field, pointIndex: pointIndex)
+        return simd_clamp(sanitized, 0, 1)
+    }
+
+    private static func sanitizeVector(_ vector: SIMD3<Float>,
+                                       defaultValue: SIMD3<Float>,
+                                       field: String,
+                                       pointIndex: Int) -> SIMD3<Float> {
+        SIMD3(
+            sanitizeScalar(vector.x, defaultValue: defaultValue.x, field: "\(field).x", pointIndex: pointIndex),
+            sanitizeScalar(vector.y, defaultValue: defaultValue.y, field: "\(field).y", pointIndex: pointIndex),
+            sanitizeScalar(vector.z, defaultValue: defaultValue.z, field: "\(field).z", pointIndex: pointIndex)
+        )
+    }
+
+    private static func sanitizeVector(_ vector: SIMD4<Float>,
+                                       defaultValue: SIMD4<Float>,
+                                       field: String,
+                                       pointIndex: Int) -> SIMD4<Float> {
+        SIMD4(
+            sanitizeScalar(vector.x, defaultValue: defaultValue.x, field: "\(field).x", pointIndex: pointIndex),
+            sanitizeScalar(vector.y, defaultValue: defaultValue.y, field: "\(field).y", pointIndex: pointIndex),
+            sanitizeScalar(vector.z, defaultValue: defaultValue.z, field: "\(field).z", pointIndex: pointIndex),
+            sanitizeScalar(vector.w, defaultValue: defaultValue.w, field: "\(field).w", pointIndex: pointIndex)
+        )
+    }
+
+    private static func sanitizeColor(_ color: SIMD4<Float>, pointIndex: Int) -> SIMD4<Float> {
+        let sanitized = sanitizeVector(color, defaultValue: SIMD4<Float>(repeating: 0), field: "color", pointIndex: pointIndex)
+        return simd_clamp(sanitized, SIMD4<Float>(repeating: 0), SIMD4<Float>(repeating: 1))
+    }
+
+    private static func sanitizeAlbedo(_ albedo: SIMD3<Float>, pointIndex: Int) -> SIMD3<Float> {
+        let sanitized = sanitizeVector(albedo, defaultValue: SplatScenePoint.defaultAlbedo, field: "albedo", pointIndex: pointIndex)
+        return simd_clamp(sanitized, SIMD3<Float>(repeating: 0), SIMD3<Float>(repeating: 1))
+    }
+
+    private static func sanitizeNormal(_ normal: SIMD3<Float>, pointIndex: Int) -> SIMD3<Float> {
+        var sanitized = sanitizeVector(normal, defaultValue: SplatScenePoint.defaultNormal, field: "normal", pointIndex: pointIndex)
+        let length = simd_length(sanitized)
+        if length > .leastNonzeroMagnitude && length.isFinite {
+            sanitized /= length
+        } else {
+            log.error("Invalid normal for splat index \(pointIndex, privacy: .public); falling back to default")
+            sanitized = SplatScenePoint.defaultNormal
+        }
+        return sanitized
+    }
+
+    private static func packHalf3(_ vector: SIMD3<Float>) -> PackedHalf3 {
+        PackedHalf3(x: Float16(vector.x), y: Float16(vector.y), z: Float16(vector.z))
+    }
+
+    private static func makeFallbackEnvironmentMap(device: MTLDevice) -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.textureCubeDescriptor(pixelFormat: .rgba8Unorm,
+                                                                    size: 1,
+                                                                    mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            fatalError("Unable to create fallback environment map texture")
+        }
+        texture.label = "SplatRendererFallbackEnvironment"
+
+        var pixel: [UInt8] = [0, 0, 0, 0]
+        let region = MTLRegionMake2D(0, 0, 1, 1)
+        pixel.withUnsafeBytes { bytes in
+            for slice in 0..<6 {
+                texture.replace(region: region,
+                                mipmapLevel: 0,
+                                slice: slice,
+                                withBytes: bytes.baseAddress!,
+                                bytesPerRow: bytes.count,
+                                bytesPerImage: bytes.count)
+            }
+        }
+
+        return texture
+    }
+
+    private static func makeFallbackBRDFLUT(device: MTLDevice) -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg8Unorm,
+                                                                  width: 1,
+                                                                  height: 1,
+                                                                  mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            fatalError("Unable to create fallback BRDF LUT texture")
+        }
+        texture.label = "SplatRendererFallbackBRDFLUT"
+
+        var pixel: [UInt8] = [0, 0]
+        let region = MTLRegionMake2D(0, 0, 1, 1)
+        pixel.withUnsafeBytes { bytes in
+            texture.replace(region: region,
+                            mipmapLevel: 0,
+                            withBytes: bytes.baseAddress!,
+                            bytesPerRow: bytes.count)
+        }
+
+        return texture
+    }
+
+    private static func makeMaterialSampler(device: MTLDevice, label: String) -> MTLSamplerState {
+        let descriptor = MTLSamplerDescriptor()
+        descriptor.label = label
+        descriptor.minFilter = .linear
+        descriptor.magFilter = .linear
+        descriptor.mipFilter = .notMipmapped
+        descriptor.sAddressMode = .clampToEdge
+        descriptor.tAddressMode = .clampToEdge
+        descriptor.rAddressMode = .clampToEdge
+        descriptor.normalizedCoordinates = true
+        guard let sampler = device.makeSamplerState(descriptor: descriptor) else {
+            fatalError("Unable to create sampler state: \(label)")
+        }
+        return sampler
+    }
+
     public struct ViewportDescriptor {
         public var viewport: MTLViewport
         public var projectionMatrix: simd_float4x4
@@ -49,6 +194,18 @@ public class SplatRenderer {
     enum BufferIndex: NSInteger {
         case uniforms = 0
         case splat    = 1
+    }
+
+    // Keep in sync with Shaders.metal : TextureIndex
+    enum TextureIndex: NSInteger {
+        case environment = 0
+        case brdf        = 1
+    }
+
+    // Keep in sync with Shaders.metal : SamplerIndex
+    enum SamplerIndex: NSInteger {
+        case environment = 0
+        case brdf        = 1
     }
 
     // Keep in sync with Shaders.metal : Uniforms
@@ -98,6 +255,10 @@ public class SplatRenderer {
         var color: PackedRGBHalf4
         var covA: PackedHalf3
         var covB: PackedHalf3
+        var albedo: PackedHalf3
+        var metallic: Float16
+        var roughness: Float16
+        var normal: PackedHalf3
     }
 
     struct SplatIndexAndDepth {
@@ -154,6 +315,13 @@ public class SplatRenderer {
     private var postprocessPipelineState: MTLRenderPipelineState?
     private var postprocessDepthState: MTLDepthStencilState?
 
+    private let fallbackEnvironmentMap: MTLTexture
+    private let fallbackBRDFLUT: MTLTexture
+    private let environmentSamplerState: MTLSamplerState
+    private let brdfSamplerState: MTLSamplerState
+    private var environmentMapTexture: MTLTexture?
+    private var brdfLookupTexture: MTLTexture?
+
     // dynamicUniformBuffers contains maxSimultaneousRenders uniforms buffers,
     // which we round-robin through, one per render; this is managed by switchToNextDynamicBuffer.
     // uniforms = the i'th buffer (where i = uniformBufferIndex, which varies from 0 to maxSimultaneousRenders-1)
@@ -201,6 +369,13 @@ public class SplatRenderer {
         self.maxViewCount = min(maxViewCount, Constants.maxViewCount)
         self.maxSimultaneousRenders = maxSimultaneousRenders
 
+        self.fallbackEnvironmentMap = Self.makeFallbackEnvironmentMap(device: device)
+        self.fallbackBRDFLUT = Self.makeFallbackBRDFLUT(device: device)
+        self.environmentSamplerState = Self.makeMaterialSampler(device: device, label: "SplatRendererEnvironmentSampler")
+        self.brdfSamplerState = Self.makeMaterialSampler(device: device, label: "SplatRendererBRDFSampler")
+        self.environmentMapTexture = nil
+        self.brdfLookupTexture = nil
+
         let dynamicUniformBuffersSize = UniformsArray.alignedSize * maxSimultaneousRenders
         self.dynamicUniformBuffers = device.makeBuffer(length: dynamicUniformBuffersSize,
                                                        options: .storageModeShared)!
@@ -210,6 +385,11 @@ public class SplatRenderer {
         self.splatBuffer = try MetalBuffer(device: device)
         self.splatBufferPrime = try MetalBuffer(device: device)
         self.indexBuffer = try MetalBuffer(device: device)
+
+#if !arch(x86_64)
+        precondition(MemoryLayout<Splat>.stride == MemoryLayout<Splat>.size,
+                     "SplatRenderer.Splat contains unexpected padding; verify ShaderCommon.Splat matches Swift layout")
+#endif
 
         do {
             library = try device.makeDefaultLibrary(bundle: Bundle.module)
@@ -221,6 +401,64 @@ public class SplatRenderer {
     public func reset() {
         splatBuffer.count = 0
         try? splatBuffer.setCapacity(0)
+    }
+
+    public func setEnvironmentMap(_ texture: MTLTexture?) throws {
+        guard let texture else {
+            environmentMapTexture = nil
+            return
+        }
+
+        guard texture.device === device else {
+            throw Error.invalidMaterialResource(resource: "environmentMap",
+                                                reason: "Texture must be created with the renderer device")
+        }
+
+        guard texture.textureType == .typeCube else {
+            throw Error.invalidMaterialResource(resource: "environmentMap",
+                                                reason: "Expected cube texture, received \(texture.textureType)")
+        }
+
+        guard texture.usage.contains(.shaderRead) else {
+            throw Error.invalidMaterialResource(resource: "environmentMap",
+                                                reason: "Texture must include shaderRead usage")
+        }
+
+        guard texture.width > 0 else {
+            throw Error.invalidMaterialResource(resource: "environmentMap",
+                                                reason: "Texture must have non-zero dimensions")
+        }
+
+        environmentMapTexture = texture
+    }
+
+    public func setBRDFLookupTexture(_ texture: MTLTexture?) throws {
+        guard let texture else {
+            brdfLookupTexture = nil
+            return
+        }
+
+        guard texture.device === device else {
+            throw Error.invalidMaterialResource(resource: "brdfLUT",
+                                                reason: "Texture must be created with the renderer device")
+        }
+
+        guard texture.textureType == .type2D else {
+            throw Error.invalidMaterialResource(resource: "brdfLUT",
+                                                reason: "Expected 2D texture, received \(texture.textureType)")
+        }
+
+        guard texture.usage.contains(.shaderRead) else {
+            throw Error.invalidMaterialResource(resource: "brdfLUT",
+                                                reason: "Texture must include shaderRead usage")
+        }
+
+        guard texture.width > 0 && texture.height > 0 else {
+            throw Error.invalidMaterialResource(resource: "brdfLUT",
+                                                reason: "Texture must have non-zero dimensions")
+        }
+
+        brdfLookupTexture = texture
     }
 
     public func read(from url: URL) async throws {
@@ -372,11 +610,15 @@ public class SplatRenderer {
         do {
             try ensureAdditionalCapacity(points.count)
         } catch {
-            Self.log.error("Failed to grow buffers: \(error)")
-            return
+            Self.log.error("Failed to grow buffers for \(points.count, privacy: .public) points: \(String(describing: error), privacy: .public)")
+            throw error
         }
 
-        splatBuffer.append(points.map { Splat($0) })
+        let startIndex = splatBuffer.count
+        for (offset, point) in points.enumerated() {
+            let index = startIndex + offset
+            splatBuffer.append(Splat(point, index: index))
+        }
     }
 
     public func add(_ point: SplatScenePoint) throws {
@@ -387,6 +629,15 @@ public class SplatRenderer {
         uniformBufferIndex = (uniformBufferIndex + 1) % maxSimultaneousRenders
         uniformBufferOffset = UniformsArray.alignedSize * uniformBufferIndex
         uniforms = UnsafeMutableRawPointer(dynamicUniformBuffers.contents() + uniformBufferOffset).bindMemory(to: UniformsArray.self, capacity: 1)
+    }
+
+    private func bindMaterialResources(to renderEncoder: MTLRenderCommandEncoder) {
+        let environmentTexture = environmentMapTexture ?? fallbackEnvironmentMap
+        let brdfTexture = brdfLookupTexture ?? fallbackBRDFLUT
+        renderEncoder.setFragmentTexture(environmentTexture, index: TextureIndex.environment.rawValue)
+        renderEncoder.setFragmentTexture(brdfTexture, index: TextureIndex.brdf.rawValue)
+        renderEncoder.setFragmentSamplerState(environmentSamplerState, index: SamplerIndex.environment.rawValue)
+        renderEncoder.setFragmentSamplerState(brdfSamplerState, index: SamplerIndex.brdf.rawValue)
     }
 
     private func updateUniforms(forViewports viewports: [ViewportDescriptor],
@@ -531,6 +782,7 @@ public class SplatRenderer {
             renderEncoder.pushDebugGroup("Draw Splats")
             renderEncoder.setRenderPipelineState(drawSplatPipelineState)
             renderEncoder.setDepthStencilState(drawSplatDepthState)
+            bindMaterialResources(to: renderEncoder)
         } else {
             guard let singleStagePipelineState
             else { return }
@@ -538,6 +790,7 @@ public class SplatRenderer {
             renderEncoder.pushDebugGroup("Draw Splats")
             renderEncoder.setRenderPipelineState(singleStagePipelineState)
             renderEncoder.setDepthStencilState(singleStageDepthState)
+            bindMaterialResources(to: renderEncoder)
         }
 
         renderEncoder.setVertexBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
@@ -617,30 +870,73 @@ public class SplatRenderer {
 
                 swap(&splatBuffer, &splatBufferPrime)
             } catch {
-                // TODO: report error
+                Self.log.error("Failed to resort splats: \(String(describing: error), privacy: .public)")
             }
         }
     }
 }
 
 extension SplatRenderer.Splat {
-    init(_ splat: SplatScenePoint) {
-        self.init(position: splat.position,
-                  color: .init(splat.color.asLinearFloat.sRGBToLinear, splat.opacity.asLinearFloat),
-                  scale: splat.scale.asLinearFloat,
-                  rotation: splat.rotation.normalized)
+    init(_ splat: SplatScenePoint, index: Int) {
+        let normalized = splat.linearNormalized
+        let color = SIMD4<Float>(normalized.color.asLinearFloat.sRGBToLinear, normalized.opacity.asLinearFloat)
+        self.init(position: normalized.position,
+                  color: color,
+                  scale: normalized.scale.asLinearFloat,
+                  rotation: normalized.rotation.normalized,
+                  albedo: normalized.albedo,
+                  metallic: normalized.metallic,
+                  roughness: normalized.roughness,
+                  normal: normalized.normal,
+                  pointIndex: index)
     }
 
     init(position: SIMD3<Float>,
          color: SIMD4<Float>,
          scale: SIMD3<Float>,
-         rotation: simd_quatf) {
+         rotation: simd_quatf,
+         albedo: SIMD3<Float>,
+         metallic: Float,
+         roughness: Float,
+         normal: SIMD3<Float>,
+         pointIndex: Int) {
         let transform = simd_float3x3(rotation) * simd_float3x3(diagonal: scale)
         let cov3D = transform * transform.transpose
-        self.init(position: MTLPackedFloat3Make(position.x, position.y, position.z),
-                  color: SplatRenderer.PackedRGBHalf4(r: Float16(color.x), g: Float16(color.y), b: Float16(color.z), a: Float16(color.w)),
-                  covA: SplatRenderer.PackedHalf3(x: Float16(cov3D[0, 0]), y: Float16(cov3D[0, 1]), z: Float16(cov3D[0, 2])),
-                  covB: SplatRenderer.PackedHalf3(x: Float16(cov3D[1, 1]), y: Float16(cov3D[1, 2]), z: Float16(cov3D[2, 2])))
+
+        let sanitizedColor = SplatRenderer.sanitizeColor(color, pointIndex: pointIndex)
+        let sanitizedAlbedo = SplatRenderer.sanitizeAlbedo(albedo, pointIndex: pointIndex)
+        let sanitizedMetallic = SplatRenderer.sanitizeUnitScalar(metallic,
+                                                                 defaultValue: SplatScenePoint.defaultMetallic,
+                                                                 field: "metallic",
+                                                                 pointIndex: pointIndex)
+        let sanitizedRoughness = SplatRenderer.sanitizeUnitScalar(roughness,
+                                                                  defaultValue: SplatScenePoint.defaultRoughness,
+                                                                  field: "roughness",
+                                                                  pointIndex: pointIndex)
+        let sanitizedNormal = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
+
+        let covA = SIMD3<Float>(cov3D[0, 0], cov3D[0, 1], cov3D[0, 2])
+        let covB = SIMD3<Float>(cov3D[1, 1], cov3D[1, 2], cov3D[2, 2])
+        let sanitizedCovA = SplatRenderer.sanitizeVector(covA,
+                                                         defaultValue: SIMD3<Float>(repeating: 0),
+                                                         field: "covA",
+                                                         pointIndex: pointIndex)
+        let sanitizedCovB = SplatRenderer.sanitizeVector(covB,
+                                                         defaultValue: SIMD3<Float>(repeating: 0),
+                                                         field: "covB",
+                                                         pointIndex: pointIndex)
+
+        self.position = MTLPackedFloat3Make(position.x, position.y, position.z)
+        self.color = SplatRenderer.PackedRGBHalf4(r: Float16(sanitizedColor.x),
+                                                  g: Float16(sanitizedColor.y),
+                                                  b: Float16(sanitizedColor.z),
+                                                  a: Float16(sanitizedColor.w))
+        self.covA = SplatRenderer.packHalf3(sanitizedCovA)
+        self.covB = SplatRenderer.packHalf3(sanitizedCovB)
+        self.albedo = SplatRenderer.packHalf3(sanitizedAlbedo)
+        self.metallic = Float16(sanitizedMetallic)
+        self.roughness = Float16(sanitizedRoughness)
+        self.normal = SplatRenderer.packHalf3(sanitizedNormal)
     }
 }
 

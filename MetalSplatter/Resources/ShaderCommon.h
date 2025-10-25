@@ -13,6 +13,18 @@ enum BufferIndex: int32_t
     BufferIndexSplat    = 1,
 };
 
+enum TextureIndex: int32_t
+{
+    TextureIndexEnvironment = 0,
+    TextureIndexBRDF        = 1,
+};
+
+enum SamplerIndex: int32_t
+{
+    SamplerIndexEnvironment = 0,
+    SamplerIndexBRDF        = 1,
+};
+
 typedef struct
 {
     matrix_float4x4 projectionMatrix;
@@ -39,6 +51,10 @@ typedef struct
     packed_half4 color;
     packed_half3 covA;
     packed_half3 covB;
+    packed_half3 albedo;
+    half          metallic;
+    half          roughness;
+    packed_half3 normal;
 } Splat;
 
 typedef struct
@@ -46,4 +62,8 @@ typedef struct
     float4 position [[position]];
     half2 relativePosition; // Ranges from -kBoundsRadius to +kBoundsRadius
     half4 color;
+    half3 albedo;
+    half metallic;
+    half roughness;
+    half3 normal;
 } FragmentIn;
