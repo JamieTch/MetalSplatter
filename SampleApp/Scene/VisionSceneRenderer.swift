@@ -52,7 +52,9 @@ class VisionSceneRenderer {
 
         worldTracking = WorldTrackingProvider()
         arSession = ARKitSession()
-        environmentProbeManager = EnvironmentProbeManager(device: device)
+        environmentProbeManager = EnvironmentProbeManager(session: arSession,
+                                                          worldTracking: worldTracking,
+                                                          device: device)
         do {
             environmentPrefilter = try EnvironmentPrefilter(device: device)
         } catch {
@@ -103,8 +105,6 @@ class VisionSceneRenderer {
             } catch {
                 fatalError("Failed to initialize ARSession")
             }
-
-            environmentProbeManager.start()
 
             let renderThread = Thread {
                 self.renderLoop()
