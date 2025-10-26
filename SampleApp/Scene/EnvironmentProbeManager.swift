@@ -16,22 +16,20 @@ final class EnvironmentProbeManager: NSObject {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "EnvironmentProbeManager",
                                      category: "EnvironmentProbe")
 
-    private let session: ARKitSession
-    private let worldTracking: WorldTrackingProvider
+    private let session: ARSession
     private let device: MTLDevice
+    private let delegateQueue = DispatchQueue(label: "com.metalsplatter.environmentProbe.delegate")
     private let stateQueue = DispatchQueue(label: "com.metalsplatter.environmentProbe.state")
 
     private var latestSnapshot: Snapshot?
     private var deliveredRevision: UInt64 = 0
-    private var environmentTask: Task<Void, Never>?
     private var isRunning = false
+    private var latestSphericalHarmonics: [Float] = []
 
-    init(session: ARKitSession, worldTracking: WorldTrackingProvider, device: MTLDevice) {
+    init(session: ARSession, device: MTLDevice) {
         self.session = session
-        self.worldTracking = worldTracking
         self.device = device
         super.init()
-        start()
     }
 
     deinit {
@@ -39,21 +37,41 @@ final class EnvironmentProbeManager: NSObject {
     }
 
     func start() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.start()
+            }
+            return
+        }
+
         guard !isRunning else { return }
         isRunning = true
 
-        environmentTask = Task { [weak self] in
-            await self?.listenForEnvironmentUpdates()
-        }
-        Self.log.debug("Subscribed to world-tracking environment updates (session: \(String(describing: session)))")
+        session.delegateQueue = delegateQueue
+        session.delegate = self
+
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.environmentTexturing = .automatic
+
+        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        Self.log.debug("Started ARSession for environment probes")
     }
 
     func stop() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.stop()
+            }
+            return
+        }
+
         guard isRunning else { return }
-        environmentTask?.cancel()
-        environmentTask = nil
+        session.pause()
+        if session.delegate === self {
+            session.delegate = nil
+        }
         isRunning = false
-        Self.log.debug("Cancelled world-tracking environment update subscription")
+        Self.log.debug("Paused ARSession for environment probes")
     }
 
     func consumeLatestSnapshot() -> Snapshot? {
@@ -92,66 +110,45 @@ final class EnvironmentProbeManager: NSObject {
         }
     }
 
-    private func listenForEnvironmentUpdates() async {
-        guard let environment = worldTracking.environment else {
-            Self.log.error("World-tracking environment provider unavailable; environment probes disabled")
-            return
-        }
-
-        await waitUntilWorldTrackingRunning()
-
-        do {
-            try await startEnvironmentUpdates(environment)
-        } catch {
-            Self.log.error("Failed to start environment updates: \(error.localizedDescription)")
-            return
-        }
-
-        for await state in environment.updates {
-            if Task.isCancelled { return }
-            handleEnvironmentState(state)
+    private func storeSphericalHarmonics(_ harmonics: [Float]) {
+        stateQueue.async {
+            self.latestSphericalHarmonics = harmonics
         }
     }
 
-    private func waitUntilWorldTrackingRunning() async {
-        while worldTracking.state != .running {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            if Task.isCancelled { return }
+    private func currentSphericalHarmonics() -> [Float] {
+        stateQueue.sync {
+            latestSphericalHarmonics
+        }
+    }
+}
+
+extension EnvironmentProbeManager: ARSessionDelegate {
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        if let coefficients = frame.lightEstimate?.sphericalHarmonicsCoefficients {
+            let harmonics = coefficients.map { Float(truncating: $0) }
+            storeSphericalHarmonics(harmonics)
+        } else {
+            storeSphericalHarmonics([])
         }
     }
 
-    private func startEnvironmentUpdates(_ environment: WorldTrackingProvider.Environment) async throws {
-        try await environment.start()
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+        handleAnchors(anchors)
     }
 
-    private func handleEnvironmentState(_ state: WorldTrackingProvider.EnvironmentState) {
-        guard let texture = state.cubeMap else {
-            Self.log.debug("Environment state update missing cube map texture")
-            return
-        }
-
-        let harmonics = currentSphericalHarmonics(from: state)
-        if harmonics.isEmpty {
-            Self.log.debug("Environment update missing spherical harmonics coefficients")
-        }
-
-        updateSnapshot(with: texture,
-                       sphericalHarmonics: harmonics,
-                       timestamp: Date())
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        handleAnchors(anchors)
     }
 
-    private func currentSphericalHarmonics(from state: WorldTrackingProvider.EnvironmentState) -> [Float] {
-        guard let coefficients = state.sphericalHarmonicsCoefficients else { return [] }
-        if let floats = coefficients as? [Float] {
-            return floats
+    private func handleAnchors(_ anchors: [ARAnchor]) {
+        let harmonics = currentSphericalHarmonics()
+        for anchor in anchors {
+            guard let probe = anchor as? AREnvironmentProbeAnchor else { continue }
+            updateSnapshot(with: probe.environmentTexture,
+                           sphericalHarmonics: harmonics,
+                           timestamp: Date())
         }
-        if let doubles = coefficients as? [Double] {
-            return doubles.map { Float($0) }
-        }
-        if let numbers = coefficients as? [NSNumber] {
-            return numbers.map { $0.floatValue }
-        }
-        return []
     }
 }
 
