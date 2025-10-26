@@ -263,17 +263,36 @@ class VisionSceneRenderer {
     }
 
     private func applyEnvironmentResourcesIfNeeded() {
-        guard environmentResourcesDirty,
-              let result = environmentPrefilterResult,
-              let splatRenderer = modelRenderer as? SplatRenderer else { return }
+        guard environmentResourcesDirty else {
+            Self.log.debug("Skipping environment bind: resources not marked dirty")
+            return
+        }
+
+        guard let result = environmentPrefilterResult else {
+            Self.log.debug("Skipping environment bind: no prefiltered result yet")
+            return
+        }
+
+        guard let splatRenderer = modelRenderer as? SplatRenderer else {
+            if let renderer = modelRenderer {
+                Self.log.debug("Active renderer is \(type(of: renderer)); waiting for SplatRenderer")
+            } else {
+                Self.log.debug("Skipping environment bind: no active renderer")
+            }
+            return
+        }
 
         do {
             try splatRenderer.setEnvironmentMap(result.environmentMap)
             try splatRenderer.setBRDFLookupTexture(result.brdfLookup)
             environmentResourcesDirty = false
             lastAppliedEnvironmentRevision = result.revision
+
+            let cubeResolution = "\(result.environmentMap.width)x\(result.environmentMap.height)"
+            let brdfSize = "\(result.brdfLookup.width)x\(result.brdfLookup.height)"
+            Self.log.debug("Applied environment revision \(result.revision): cube size \(cubeResolution), BRDF LUT \(brdfSize)")
         } catch {
-            Self.log.error("Unable to bind environment resources: \(error.localizedDescription)")
+            Self.log.warning("Unable to bind environment resources: \(error)")
         }
     }
 
