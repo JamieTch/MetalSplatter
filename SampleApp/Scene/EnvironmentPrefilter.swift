@@ -70,8 +70,10 @@ final class EnvironmentPrefilter {
     private let brdfResolution: Int
 
     private var cachedBRDFLUT: MTLTexture?
+#if DEBUG
     private var luminanceScratchBuffer: MTLBuffer?
-    private var lastLoggedRevision: UInt64?
+    private var lastLoggedLuminanceRevisions: [String: UInt64] = [:]
+#endif
 
     private struct LuminanceStatistics {
         var minimum: Float
@@ -122,11 +124,28 @@ final class EnvironmentPrefilter {
         }
 
         let environmentTexture = try makeEnvironmentTexture()
+
+#if DEBUG
+        logTextureDetails(texture: snapshot.texture,
+                           label: "ARKit probe",
+                           revision: snapshot.revision)
+        if sourceTexture !== snapshot.texture {
+            logTextureDetails(texture: sourceTexture,
+                               label: "Sanitized probe view",
+                               revision: snapshot.revision)
+        }
+        logLuminanceDiagnostics(for: sourceTexture,
+                                 revision: snapshot.revision,
+                                 label: "probe")
+#endif
+
         try encodePrefilter(from: sourceTexture, to: environmentTexture)
 
-        if lastLoggedRevision != snapshot.revision {
-            logLuminanceDiagnostics(for: environmentTexture, revision: snapshot.revision)
-        }
+#if DEBUG
+        logLuminanceDiagnostics(for: environmentTexture,
+                                 revision: snapshot.revision,
+                                 label: "prefiltered")
+#endif
 
         let brdf = try makeBRDFLookupTexture()
 
@@ -282,7 +301,28 @@ final class EnvironmentPrefilter {
         }
     }
 
-    private func logLuminanceDiagnostics(for texture: MTLTexture, revision: UInt64) {
+#if DEBUG
+    private func logTextureDetails(texture: MTLTexture,
+                                   label: StaticString,
+                                   revision: UInt64) {
+        let pixelFormat = String(describing: texture.pixelFormat)
+        let textureType = String(describing: texture.textureType)
+        let usageDescription = String(describing: texture.usage)
+        let storageDescription = String(describing: texture.storageMode)
+        let size = "\(texture.width)x\(texture.height)"
+        let labelDescription = String(describing: label)
+        Self.log.debug("Environment revision \(revision) \(labelDescription): format \(pixelFormat), type \(textureType), size \(size), mip count \(texture.mipmapLevelCount), usage \(usageDescription), storage \(storageDescription)")
+    }
+
+    private func logLuminanceDiagnostics(for texture: MTLTexture,
+                                         revision: UInt64,
+                                         label: StaticString) {
+        let key = String(describing: label)
+        if let previous = lastLoggedLuminanceRevisions[key], previous == revision {
+            return
+        }
+        lastLoggedLuminanceRevisions[key] = revision
+
         let faceSize = texture.width
         let componentsPerPixel = 4
         let bytesPerPixel = componentsPerPixel * MemoryLayout<UInt16>.stride
@@ -360,15 +400,15 @@ final class EnvironmentPrefilter {
             statistics.append(LuminanceStatistics(minimum: minLum, maximum: maxLum, average: averageLum))
         }
 
-        var message = "Environment revision \(revision) luminance"
+        let labelDescription = String(describing: label)
+        var message = "Environment revision \(revision) \(labelDescription) luminance"
         for (index, stat) in statistics.enumerated() {
             let faceSummary = String(format: " F%u[min:%.3f max:%.3f avg:%.3f]", UInt32(index), stat.minimum, stat.maximum, stat.average)
             message.append(faceSummary)
         }
         Self.log.debug("\(message)")
-
-        lastLoggedRevision = revision
     }
+#endif
 }
 
 #endif // os(visionOS)
