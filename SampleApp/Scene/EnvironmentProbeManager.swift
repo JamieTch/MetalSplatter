@@ -26,6 +26,8 @@ final class EnvironmentProbeManager: NSObject {
     private var deliveredRevision: UInt64 = 0
     private var environmentTask: Task<Void, Never>?
     private var isRunning = false
+    private var lastMissingTextureLogDescription: String?
+    private var lastTextureMetricsLogDescription: String?
 
     init(session: ARKitSession,
          worldTracking: WorldTrackingProvider,
@@ -138,7 +140,17 @@ final class EnvironmentProbeManager: NSObject {
         let anchor = update.anchor
 
         guard let texture = anchor.environmentTexture else {
-            Self.log.debug("Environment probe anchor missing cube map texture")
+            let qualityDescription: String
+            if let quality = anchor.estimate?.quality {
+                qualityDescription = String(describing: quality)
+            } else {
+                qualityDescription = "unavailable"
+            }
+            let logDescription = "anchor:\(anchor.id.uuidString)|quality:\(qualityDescription)|world:\(String(describing: worldTracking.state))|environment:\(String(describing: environmentLightEstimation.state))"
+            if logDescription != lastMissingTextureLogDescription {
+                Self.log.debug("Environment probe anchor missing cube map texture (anchor: \(anchor.id), quality: \(qualityDescription), world tracking state: \(String(describing: worldTracking.state)), environment light estimation state: \(String(describing: environmentLightEstimation.state)))")
+                lastMissingTextureLogDescription = logDescription
+            }
             return
         }
 
@@ -147,9 +159,17 @@ final class EnvironmentProbeManager: NSObject {
             Self.log.debug("Environment probe anchor missing spherical harmonics coefficients")
         }
 
+        let timestamp = Date()
+        let metricsDescription = "anchor:\(anchor.id.uuidString)|format:\(texture.pixelFormat.rawValue)|width:\(texture.width)|height:\(texture.height)|mips:\(texture.mipmapLevelCount)"
+        if metricsDescription != lastTextureMetricsLogDescription {
+            let nextRevision = stateQueue.sync { (self.latestSnapshot?.revision ?? 0) &+ 1 }
+            Self.log.debug("Environment probe cube map updated (anchor: \(anchor.id), pixel format: \(String(describing: texture.pixelFormat)), size: \(texture.width)x\(texture.height), mip count: \(texture.mipmapLevelCount), timestamp: \(timestamp), next revision: \(nextRevision))")
+            lastTextureMetricsLogDescription = metricsDescription
+        }
+
         updateSnapshot(with: texture,
                        sphericalHarmonics: harmonics,
-                       timestamp: Date())
+                       timestamp: timestamp)
     }
 
     private func sphericalHarmonicsCoefficients(from anchor: EnvironmentProbeAnchor) -> [Float] {
