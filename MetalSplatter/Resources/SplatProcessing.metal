@@ -25,9 +25,19 @@ float3 safeNormalize(float3 value, float3 fallback) {
     return normalize(value);
 }
 
+/// Computes a normalized ambient occlusion factor.
+///
+/// The returned value represents the per-unit-opacity occlusion contribution, so
+/// that the final shading remains proportional to a single power of opacity even
+/// after tone mapping.
 half computeAmbientOcclusion(half opacity) {
     half clampedOpacity = clamp(opacity, half(0), half(1));
-    return half(1) - half(fast::exp(-float(clampedOpacity)));
+    float occlusion = 1.0f - fast::exp(-float(clampedOpacity));
+    if (clampedOpacity <= half(1e-3f)) {
+        return half(0);
+    }
+    float normalized = occlusion / float(clampedOpacity);
+    return half(min(1.0f, normalized));
 }
 
 float3 sampleDiffuseIrradiance(texturecube<half> environmentMap,
