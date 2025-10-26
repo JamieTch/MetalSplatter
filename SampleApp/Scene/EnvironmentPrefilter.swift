@@ -70,6 +70,14 @@ final class EnvironmentPrefilter {
     private let brdfResolution: Int
 
     private var cachedBRDFLUT: MTLTexture?
+    private var luminanceScratchBuffer: MTLBuffer?
+    private var lastLoggedRevision: UInt64?
+
+    private struct LuminanceStatistics {
+        var minimum: Float
+        var maximum: Float
+        var average: Float
+    }
 
     init(device: MTLDevice,
          mapSize: Int = 256,
@@ -115,6 +123,11 @@ final class EnvironmentPrefilter {
 
         let environmentTexture = try makeEnvironmentTexture()
         try encodePrefilter(from: sourceTexture, to: environmentTexture)
+
+        if lastLoggedRevision != snapshot.revision {
+            logLuminanceDiagnostics(for: environmentTexture, revision: snapshot.revision)
+        }
+
         let brdf = try makeBRDFLookupTexture()
 
         return EnvironmentPrefilterResult(environmentMap: environmentTexture,
@@ -267,6 +280,94 @@ final class EnvironmentPrefilter {
             Self.log.error("BRDF integration command buffer failed: \(commandBuffer.error?.localizedDescription ?? "unknown")")
             throw Error.commandBufferFailed
         }
+    }
+
+    private func logLuminanceDiagnostics(for texture: MTLTexture, revision: UInt64) {
+        let faceSize = texture.width
+        let componentsPerPixel = 4
+        let bytesPerPixel = componentsPerPixel * MemoryLayout<UInt16>.stride
+        let faceByteCount = faceSize * faceSize * bytesPerPixel
+        let totalByteCount = faceByteCount * 6
+
+        if luminanceScratchBuffer == nil || luminanceScratchBuffer?.length ?? 0 < totalByteCount {
+            luminanceScratchBuffer = device.makeBuffer(length: totalByteCount, options: .storageModeShared)
+            luminanceScratchBuffer?.label = "EnvironmentPrefilterLuminanceScratch"
+        }
+
+        guard let scratchBuffer = luminanceScratchBuffer else {
+            return
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            return
+        }
+        commandBuffer.label = "EnvironmentPrefilterLuminanceCopy"
+
+        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+            let bytesPerRow = faceSize * bytesPerPixel
+            let bytesPerImage = faceByteCount
+            let origin = MTLOrigin(x: 0, y: 0, z: 0)
+            let size = MTLSize(width: faceSize, height: faceSize, depth: 1)
+
+            for face in 0..<6 {
+                blitEncoder.copy(from: texture,
+                                 sourceSlice: face,
+                                 sourceLevel: 0,
+                                 sourceOrigin: origin,
+                                 sourceSize: size,
+                                 to: scratchBuffer,
+                                 destinationOffset: faceByteCount * face,
+                                 destinationBytesPerRow: bytesPerRow,
+                                 destinationBytesPerImage: bytesPerImage)
+            }
+
+            blitEncoder.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        if commandBuffer.status == .error {
+            return
+        }
+
+        let pixelCountPerFace = faceSize * faceSize
+        let totalComponentCount = pixelCountPerFace * componentsPerPixel * 6
+        let componentPointer = scratchBuffer.contents().bindMemory(to: UInt16.self, capacity: totalComponentCount)
+
+        var statistics: [LuminanceStatistics] = []
+        statistics.reserveCapacity(6)
+
+        for face in 0..<6 {
+            let faceOffset = face * pixelCountPerFace * componentsPerPixel
+            var minLum = Float.greatestFiniteMagnitude
+            var maxLum: Float = -Float.greatestFiniteMagnitude
+            var sumLum: Float = 0
+
+            for pixel in 0..<pixelCountPerFace {
+                let baseIndex = faceOffset + pixel * componentsPerPixel
+                let r = Float(Float16(bitPattern: componentPointer[baseIndex]))
+                let g = Float(Float16(bitPattern: componentPointer[baseIndex + 1]))
+                let b = Float(Float16(bitPattern: componentPointer[baseIndex + 2]))
+
+                let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+                minLum = min(minLum, luminance)
+                maxLum = max(maxLum, luminance)
+                sumLum += luminance
+            }
+
+            let averageLum = sumLum / Float(pixelCountPerFace)
+            statistics.append(LuminanceStatistics(minimum: minLum, maximum: maxLum, average: averageLum))
+        }
+
+        var message = "Environment revision \(revision) luminance"
+        for (index, stat) in statistics.enumerated() {
+            let faceSummary = String(format: " F%u[min:%.3f max:%.3f avg:%.3f]", UInt32(index), stat.minimum, stat.maximum, stat.average)
+            message.append(faceSummary)
+        }
+        Self.log.debug("\(message)")
+
+        lastLoggedRevision = revision
     }
 }
 
