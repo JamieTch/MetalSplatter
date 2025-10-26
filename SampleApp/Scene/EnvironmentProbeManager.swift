@@ -16,47 +16,44 @@ final class EnvironmentProbeManager: NSObject {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "EnvironmentProbeManager",
                                      category: "EnvironmentProbe")
 
-    private let session: ARSession
+    private let session: ARKitSession
+    private let worldTracking: WorldTrackingProvider
     private let device: MTLDevice
     private let stateQueue = DispatchQueue(label: "com.metalsplatter.environmentProbe.state")
 
     private var latestSnapshot: Snapshot?
     private var deliveredRevision: UInt64 = 0
+    private var environmentTask: Task<Void, Never>?
     private var isRunning = false
 
-    override init() {
-        guard let defaultDevice = MTLCreateSystemDefaultDevice() else {
-            fatalError("EnvironmentProbeManager requires a Metal device")
-        }
-        self.device = defaultDevice
-        self.session = ARSession()
+    init(session: ARKitSession, worldTracking: WorldTrackingProvider, device: MTLDevice) {
+        self.session = session
+        self.worldTracking = worldTracking
+        self.device = device
         super.init()
-        self.session.delegate = self
+        start()
     }
 
-    init(device: MTLDevice) {
-        self.device = device
-        self.session = ARSession()
-        super.init()
-        self.session.delegate = self
+    deinit {
+        stop()
     }
 
     func start() {
         guard !isRunning else { return }
-
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.environmentTexturing = .automatic
-
-        session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         isRunning = true
-        Self.log.debug("Started ARSession with automatic environment texturing")
+
+        environmentTask = Task { [weak self] in
+            await self?.listenForEnvironmentUpdates()
+        }
+        Self.log.debug("Subscribed to world-tracking environment updates (session: \(String(describing: session)))")
     }
 
     func stop() {
         guard isRunning else { return }
-        session.pause()
+        environmentTask?.cancel()
+        environmentTask = nil
         isRunning = false
-        Self.log.debug("Stopped ARSession environment probe updates")
+        Self.log.debug("Cancelled world-tracking environment update subscription")
     }
 
     func consumeLatestSnapshot() -> Snapshot? {
@@ -75,7 +72,7 @@ final class EnvironmentProbeManager: NSObject {
         }
 
         guard texture.device === device else {
-            Self.log.error("Environment texture device mismatch; expected \(device), received \(String(describing: texture.device))")
+            Self.log.error("Environment texture device mismatch; expected \(String(describing: device)), received \(String(describing: texture.device))")
             return
         }
 
@@ -95,63 +92,66 @@ final class EnvironmentProbeManager: NSObject {
         }
     }
 
-    private func currentSphericalHarmonics(from frame: ARFrame?) -> [Float] {
-        guard let coefficients = frame?.lightEstimate?.sphericalHarmonicsCoefficients else { return [] }
-        return coefficients.map { Float(truncating: $0) }
-    }
-}
+    private func listenForEnvironmentUpdates() async {
+        guard let environment = worldTracking.environment else {
+            Self.log.error("World-tracking environment provider unavailable; environment probes disabled")
+            return
+        }
 
-extension EnvironmentProbeManager: ARSessionDelegate {
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard isRunning else { return }
-        let harmonics = currentSphericalHarmonics(from: frame)
+        await waitUntilWorldTrackingRunning()
+
+        do {
+            try await startEnvironmentUpdates(environment)
+        } catch {
+            Self.log.error("Failed to start environment updates: \(error.localizedDescription)")
+            return
+        }
+
+        for await state in environment.updates {
+            if Task.isCancelled { return }
+            handleEnvironmentState(state)
+        }
+    }
+
+    private func waitUntilWorldTrackingRunning() async {
+        while worldTracking.state != .running {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            if Task.isCancelled { return }
+        }
+    }
+
+    private func startEnvironmentUpdates(_ environment: WorldTrackingProvider.Environment) async throws {
+        try await environment.start()
+    }
+
+    private func handleEnvironmentState(_ state: WorldTrackingProvider.EnvironmentState) {
+        guard let texture = state.cubeMap else {
+            Self.log.debug("Environment state update missing cube map texture")
+            return
+        }
+
+        let harmonics = currentSphericalHarmonics(from: state)
         if harmonics.isEmpty {
-            Self.log.debug("No spherical harmonics coefficients available in current frame")
+            Self.log.debug("Environment update missing spherical harmonics coefficients")
         }
-        if let probeTexture = frame.environmentTexture {
-            updateSnapshot(with: probeTexture,
-                           sphericalHarmonics: harmonics,
-                           timestamp: Date())
+
+        updateSnapshot(with: texture,
+                       sphericalHarmonics: harmonics,
+                       timestamp: Date())
+    }
+
+    private func currentSphericalHarmonics(from state: WorldTrackingProvider.EnvironmentState) -> [Float] {
+        guard let coefficients = state.sphericalHarmonicsCoefficients else { return [] }
+        if let floats = coefficients as? [Float] {
+            return floats
         }
-    }
-
-    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
-        handleProbeAnchors(anchors)
-    }
-
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
-        handleProbeAnchors(anchors)
-    }
-
-    private func handleProbeAnchors(_ anchors: [ARAnchor]) {
-        guard isRunning else { return }
-        var handled = false
-        for anchor in anchors {
-            guard let probe = anchor as? AREnvironmentProbeAnchor else { continue }
-            handled = true
-            let harmonics = currentSphericalHarmonics(from: session.currentFrame)
-            updateSnapshot(with: probe.environmentTexture,
-                           sphericalHarmonics: harmonics,
-                           timestamp: Date())
+        if let doubles = coefficients as? [Double] {
+            return doubles.map { Float($0) }
         }
-        if !handled {
-            Self.log.debug("Received anchor update without environment probe")
+        if let numbers = coefficients as? [NSNumber] {
+            return numbers.map { $0.floatValue }
         }
-    }
-
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        Self.log.error("Environment probe session failed: \(error.localizedDescription)")
-    }
-
-    func sessionWasInterrupted(_ session: ARSession) {
-        Self.log.warning("Environment probe session interrupted")
-    }
-
-    func sessionInterruptionEnded(_ session: ARSession) {
-        Self.log.info("Environment probe session interruption ended")
-        if isRunning {
-            start()
-        }
+        return []
     }
 }
 
