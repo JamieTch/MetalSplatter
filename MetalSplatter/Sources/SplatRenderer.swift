@@ -355,6 +355,7 @@ public class SplatRenderer {
     private let brdfSamplerState: MTLSamplerState
     private var environmentMapTexture: MTLTexture?
     private var brdfLookupTexture: MTLTexture?
+    private var didLogFallbackEnvironmentMapUsage = false
 
     // dynamicUniformBuffers contains maxSimultaneousRenders uniforms buffers,
     // which we round-robin through, one per render; this is managed by switchToNextDynamicBuffer.
@@ -440,6 +441,7 @@ public class SplatRenderer {
     public func setEnvironmentMap(_ texture: MTLTexture?) throws {
         guard let texture else {
             environmentMapTexture = nil
+            didLogFallbackEnvironmentMapUsage = false
             return
         }
 
@@ -464,6 +466,7 @@ public class SplatRenderer {
         }
 
         environmentMapTexture = texture
+        didLogFallbackEnvironmentMapUsage = false
     }
 
     public func setBRDFLookupTexture(_ texture: MTLTexture?) throws {
@@ -666,6 +669,11 @@ public class SplatRenderer {
     }
 
     private func bindMaterialResources(to renderEncoder: MTLRenderCommandEncoder) {
+        let isUsingFallbackEnvironment = environmentMapTexture == nil
+        if isUsingFallbackEnvironment && !didLogFallbackEnvironmentMapUsage {
+            Self.log.warning("Using fallback 1x1 environment map; check environment probe configuration")
+            didLogFallbackEnvironmentMapUsage = true
+        }
         let environmentTexture = environmentMapTexture ?? fallbackEnvironmentMap
         let brdfTexture = brdfLookupTexture ?? fallbackBRDFLUT
         renderEncoder.setFragmentTexture(environmentTexture, index: TextureIndex.environment.rawValue)
