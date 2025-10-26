@@ -110,10 +110,20 @@ final class EnvironmentPrefilter {
     }
 
     private func sanitizedSourceTexture(from texture: MTLTexture) -> MTLTexture? {
-        if texture.pixelFormat == .rgba16Float || texture.pixelFormat == .rgba32Float {
+        switch texture.pixelFormat {
+        case .rgba16Float, .rgba32Float,
+             .rgba8Unorm, .rgba8Unorm_sRGB,
+             .bgra8Unorm, .bgra8Unorm_sRGB,
+             .bgr10_xr, .bgr10_xr_sRGB:
             return texture
+        default:
+            if let view = texture.makeTextureView(pixelFormat: .rgba16Float) {
+                Self.log.debug("Created float16 view for environment probe texture (format: \(texture.pixelFormat.rawValue))")
+                return view
+            }
+            Self.log.error("Unsupported environment probe pixel format: \(texture.pixelFormat.rawValue)")
+            return nil
         }
-        return texture.makeTextureView(pixelFormat: .rgba16Float)
     }
 
     private func makeEnvironmentTexture() throws -> MTLTexture {
