@@ -665,6 +665,10 @@ public class SplatRenderer {
         try add([ point ])
     }
 
+    private enum TelemetryConstants {
+        static let fallbackEscalationFrameThreshold: UInt32 = 120
+    }
+
     public struct MaterialFallbackTelemetry {
         public var environmentFallbackBindings: UInt32
         public var brdfFallbackBindings: UInt32
@@ -678,8 +682,12 @@ public class SplatRenderer {
 
     public private(set) var materialFallbackTelemetry = MaterialFallbackTelemetry()
 
+    public var automaticallyLogsFallbackTelemetry = true
+
     private var didLogEnvironmentFallbackThisFrame = false
     private var didLogBRDFFallbackThisFrame = false
+    private var fallbackFrameStreak: UInt32 = 0
+    private var didEscalateFallback = false
 
     private func beginTelemetryFrame() {
         materialFallbackTelemetry = MaterialFallbackTelemetry()
@@ -915,6 +923,58 @@ public class SplatRenderer {
         }
 
         renderEncoder.endEncoding()
+
+        emitFallbackTelemetryIfNeeded()
+    }
+
+    private func emitFallbackTelemetryIfNeeded() {
+        guard automaticallyLogsFallbackTelemetry else { return }
+
+        let telemetry = materialFallbackTelemetry
+        let usedEnvironmentFallback = telemetry.environmentFallbackBindings > 0
+        let usedBRDFFallback = telemetry.brdfFallbackBindings > 0
+
+        guard usedEnvironmentFallback || usedBRDFFallback else {
+            guard fallbackFrameStreak != 0 else { return }
+            Self.log.info("Fallback material bindings resolved after \(fallbackFrameStreak) frame(s)")
+            fallbackFrameStreak = 0
+            didEscalateFallback = false
+            return
+        }
+
+        fallbackFrameStreak &+= 1
+
+        var reasons: [String] = []
+        if usedEnvironmentFallback {
+            if environmentMapTexture == nil {
+                reasons.append("environmentMapTexture was nil")
+            } else {
+                reasons.append("environment map texture was invalid")
+            }
+        }
+        if usedBRDFFallback {
+            if brdfLookupTexture == nil {
+                reasons.append("brdfLookupTexture was nil")
+            } else {
+                reasons.append("BRDF lookup texture was invalid")
+            }
+        }
+
+        let reasonSummary: String
+        if reasons.isEmpty {
+            reasonSummary = "material resources were missing or invalid"
+        } else {
+            reasonSummary = reasons.joined(separator: "; ")
+        }
+        Self.log.warning("Renderer bound fallback material resources this frame (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Reason: \(reasonSummary). Provide valid textures using setEnvironmentMap(_:) and setBRDFLookupTexture(_:).")
+
+        if fallbackFrameStreak >= TelemetryConstants.fallbackEscalationFrameThreshold && !didEscalateFallback {
+            didEscalateFallback = true
+            Self.log.error("Fallback material resources persisted for \(fallbackFrameStreak) consecutive frames")
+#if DEBUG
+            assertionFailure("Fallback material resources persisted for \(fallbackFrameStreak) consecutive frames")
+#endif
+        }
     }
 
     // Sort splatBuffer (read-only), storing the results in splatBuffer (write-only) then swap splatBuffer and splatBufferPrime
