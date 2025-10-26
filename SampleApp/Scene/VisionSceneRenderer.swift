@@ -36,6 +36,7 @@ class VisionSceneRenderer {
 
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
+    let environmentProbeSession: ARSession
 
     private let environmentProbeManager: EnvironmentProbeManager
     private let environmentPrefilter: EnvironmentPrefilter?
@@ -52,8 +53,8 @@ class VisionSceneRenderer {
 
         worldTracking = WorldTrackingProvider()
         arSession = ARKitSession()
-        environmentProbeManager = EnvironmentProbeManager(session: arSession,
-                                                          worldTracking: worldTracking,
+        environmentProbeSession = ARSession()
+        environmentProbeManager = EnvironmentProbeManager(session: environmentProbeSession,
                                                           device: device)
         do {
             environmentPrefilter = try EnvironmentPrefilter(device: device)
@@ -103,8 +104,10 @@ class VisionSceneRenderer {
             do {
                 try await arSession.run([worldTracking])
             } catch {
-                fatalError("Failed to initialize ARSession")
+                fatalError("Failed to initialize ARKitSession")
             }
+
+            environmentProbeManager.start()
 
             let renderThread = Thread {
                 self.renderLoop()
@@ -225,6 +228,7 @@ class VisionSceneRenderer {
         while true {
             if layerRenderer.state == .invalidated {
                 Self.log.warning("Layer is invalidated")
+                environmentProbeManager.stop()
                 return
             } else if layerRenderer.state == .paused {
                 layerRenderer.waitUntilRunning()
