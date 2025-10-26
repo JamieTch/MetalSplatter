@@ -18,6 +18,7 @@ final class EnvironmentProbeManager: NSObject {
 
     private let session: ARKitSession
     private let worldTracking: WorldTrackingProvider
+    private let environmentLightEstimation: EnvironmentLightEstimationProvider
     private let device: MTLDevice
     private let stateQueue = DispatchQueue(label: "com.metalsplatter.environmentProbe.state")
 
@@ -26,9 +27,13 @@ final class EnvironmentProbeManager: NSObject {
     private var environmentTask: Task<Void, Never>?
     private var isRunning = false
 
-    init(session: ARKitSession, worldTracking: WorldTrackingProvider, device: MTLDevice) {
+    init(session: ARKitSession,
+         worldTracking: WorldTrackingProvider,
+         environmentLightEstimation: EnvironmentLightEstimationProvider,
+         device: MTLDevice) {
         self.session = session
         self.worldTracking = worldTracking
+        self.environmentLightEstimation = environmentLightEstimation
         self.device = device
         super.init()
         start()
@@ -45,7 +50,7 @@ final class EnvironmentProbeManager: NSObject {
         environmentTask = Task { [weak self] in
             await self?.listenForEnvironmentUpdates()
         }
-        Self.log.debug("Subscribed to world-tracking environment updates (session: \(String(describing: session)))")
+        Self.log.debug("Subscribed to environment light estimation updates (session: \(String(describing: session)))")
     }
 
     func stop() {
@@ -53,7 +58,7 @@ final class EnvironmentProbeManager: NSObject {
         environmentTask?.cancel()
         environmentTask = nil
         isRunning = false
-        Self.log.debug("Cancelled world-tracking environment update subscription")
+        Self.log.debug("Cancelled environment light estimation update subscription")
     }
 
     func consumeLatestSnapshot() -> Snapshot? {
@@ -93,46 +98,41 @@ final class EnvironmentProbeManager: NSObject {
     }
 
     private func listenForEnvironmentUpdates() async {
-        guard let environment = worldTracking.environment else {
-            Self.log.error("World-tracking environment provider unavailable; environment probes disabled")
-            return
-        }
+        await waitUntilProvidersRunning()
 
-        await waitUntilWorldTrackingRunning()
-
-        do {
-            try await startEnvironmentUpdates(environment)
-        } catch {
-            Self.log.error("Failed to start environment updates: \(error.localizedDescription)")
-            return
-        }
-
-        for await state in environment.updates {
+        for await update in environmentLightEstimation.anchorUpdates {
             if Task.isCancelled { return }
-            handleEnvironmentState(state)
+            handleAnchorUpdate(update)
         }
     }
 
-    private func waitUntilWorldTrackingRunning() async {
-        while worldTracking.state != .running {
+    private func waitUntilProvidersRunning() async {
+        while worldTracking.state != .running || environmentLightEstimation.state != .running {
             try? await Task.sleep(nanoseconds: 50_000_000)
             if Task.isCancelled { return }
         }
     }
 
-    private func startEnvironmentUpdates(_ environment: WorldTrackingProvider.Environment) async throws {
-        try await environment.start()
-    }
-
-    private func handleEnvironmentState(_ state: WorldTrackingProvider.EnvironmentState) {
-        guard let texture = state.cubeMap else {
-            Self.log.debug("Environment state update missing cube map texture")
+    private func handleAnchorUpdate(_ update: AnchorUpdate<EnvironmentProbeAnchor>) {
+        switch update.event {
+        case .removed:
+            return
+        case .added, .updated:
+            break
+        @unknown default:
             return
         }
 
-        let harmonics = currentSphericalHarmonics(from: state)
+        let anchor = update.anchor
+
+        guard let texture = anchor.environmentTexture else {
+            Self.log.debug("Environment probe anchor missing cube map texture")
+            return
+        }
+
+        let harmonics = sphericalHarmonicsCoefficients(from: anchor)
         if harmonics.isEmpty {
-            Self.log.debug("Environment update missing spherical harmonics coefficients")
+            Self.log.debug("Environment probe anchor missing spherical harmonics coefficients")
         }
 
         updateSnapshot(with: texture,
@@ -140,8 +140,9 @@ final class EnvironmentProbeManager: NSObject {
                        timestamp: Date())
     }
 
-    private func currentSphericalHarmonics(from state: WorldTrackingProvider.EnvironmentState) -> [Float] {
-        guard let coefficients = state.sphericalHarmonicsCoefficients else { return [] }
+    private func sphericalHarmonicsCoefficients(from anchor: EnvironmentProbeAnchor) -> [Float] {
+        guard let coefficients = anchor.sphericalHarmonicsCoefficients else { return [] }
+
         if let floats = coefficients as? [Float] {
             return floats
         }

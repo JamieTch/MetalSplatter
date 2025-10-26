@@ -36,6 +36,7 @@ class VisionSceneRenderer {
 
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
+    let environmentLightEstimation: EnvironmentLightEstimationProvider
 
     private let environmentProbeManager: EnvironmentProbeManager
     private let environmentPrefilter: EnvironmentPrefilter?
@@ -51,9 +52,11 @@ class VisionSceneRenderer {
         self.commandQueue = self.device.makeCommandQueue()!
 
         worldTracking = WorldTrackingProvider()
+        environmentLightEstimation = EnvironmentLightEstimationProvider()
         arSession = ARKitSession()
         environmentProbeManager = EnvironmentProbeManager(session: arSession,
                                                           worldTracking: worldTracking,
+                                                          environmentLightEstimation: environmentLightEstimation,
                                                           device: device)
         do {
             environmentPrefilter = try EnvironmentPrefilter(device: device)
@@ -101,7 +104,7 @@ class VisionSceneRenderer {
     func startRenderLoop() {
         Task {
             do {
-                try await arSession.run([worldTracking])
+                try await arSession.run([worldTracking, environmentLightEstimation])
             } catch {
                 fatalError("Failed to initialize ARSession")
             }
