@@ -134,6 +134,77 @@ public class SplatRenderer {
                     w: Float16(vector.w))
     }
 
+#if DEBUG
+    private static func describeMaterialDiagnostics(points: [SplatScenePoint]) -> String? {
+        guard !points.isEmpty else { return nil }
+
+        var albedoMin = SIMD3<Float>(repeating: .infinity)
+        var albedoMax = SIMD3<Float>(repeating: -.infinity)
+        var albedoSum = SIMD3<Float>(repeating: 0)
+
+        var opacityMin: Float = .infinity
+        var opacityMax: Float = -.infinity
+        var opacitySum: Float = 0
+
+        var metallicMin: Float = .infinity
+        var metallicMax: Float = -.infinity
+        var metallicSum: Float = 0
+
+        var roughnessMin: Float = .infinity
+        var roughnessMax: Float = -.infinity
+        var roughnessSum: Float = 0
+
+        for point in points {
+            let normalized = point.linearNormalized
+
+            let albedo = normalized.albedo
+            albedoMin = SIMD3<Float>(x: Swift.min(albedoMin.x, albedo.x),
+                                     y: Swift.min(albedoMin.y, albedo.y),
+                                     z: Swift.min(albedoMin.z, albedo.z))
+            albedoMax = SIMD3<Float>(x: Swift.max(albedoMax.x, albedo.x),
+                                     y: Swift.max(albedoMax.y, albedo.y),
+                                     z: Swift.max(albedoMax.z, albedo.z))
+            albedoSum += albedo
+
+            let opacity = normalized.opacity.asLinearFloat
+            opacityMin = Swift.min(opacityMin, opacity)
+            opacityMax = Swift.max(opacityMax, opacity)
+            opacitySum += opacity
+
+            let metallic = normalized.metallic
+            metallicMin = Swift.min(metallicMin, metallic)
+            metallicMax = Swift.max(metallicMax, metallic)
+            metallicSum += metallic
+
+            let roughness = normalized.roughness
+            roughnessMin = Swift.min(roughnessMin, roughness)
+            roughnessMax = Swift.max(roughnessMax, roughness)
+            roughnessSum += roughness
+        }
+
+        let count = Float(points.count)
+        let albedoAverage = albedoSum / count
+        let opacityAverage = opacitySum / count
+        let metallicAverage = metallicSum / count
+        let roughnessAverage = roughnessSum / count
+
+        func formatScalar(_ value: Float) -> String {
+            String(format: "%.3f", value)
+        }
+
+        func formatVector(_ vector: SIMD3<Float>) -> String {
+            "[\(formatScalar(vector.x)), \(formatScalar(vector.y)), \(formatScalar(vector.z))]"
+        }
+
+        let albedoSummary = "albedo avg \(formatVector(albedoAverage)) range \(formatVector(albedoMin))–\(formatVector(albedoMax))"
+        let opacitySummary = "opacity avg \(formatScalar(opacityAverage)) range \(formatScalar(opacityMin))–\(formatScalar(opacityMax))"
+        let metallicSummary = "metallic avg \(formatScalar(metallicAverage)) range \(formatScalar(metallicMin))–\(formatScalar(metallicMax))"
+        let roughnessSummary = "roughness avg \(formatScalar(roughnessAverage)) range \(formatScalar(roughnessMin))–\(formatScalar(roughnessMax))"
+
+        return "Loaded \(points.count) splats — \(albedoSummary), \(opacitySummary), \(metallicSummary), \(roughnessSummary)"
+    }
+#endif
+
     private static func makeFallbackEnvironmentMap(device: MTLDevice) -> MTLTexture {
         let descriptor = MTLTextureDescriptor.textureCubeDescriptor(pixelFormat: .rgba8Unorm,
                                                                     size: 1,
@@ -498,6 +569,11 @@ public class SplatRenderer {
     public func read(from url: URL) async throws {
         var newPoints = SplatMemoryBuffer()
         try await newPoints.read(from: try AutodetectSceneReader(url))
+#if DEBUG
+        if let diagnostics = Self.describeMaterialDiagnostics(points: newPoints.points) {
+            Self.log.info("\(diagnostics, privacy: .public)")
+        }
+#endif
         try add(newPoints.points)
     }
 
