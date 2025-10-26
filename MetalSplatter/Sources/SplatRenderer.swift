@@ -144,7 +144,11 @@ public class SplatRenderer {
         }
         texture.label = "SplatRendererFallbackEnvironment"
 
-        var pixel: [UInt8] = [0, 0, 0, 0]
+        // Use a neutral mid-gray fallback so splats remain visible even if the
+        // real environment map has not been bound yet. The shader multiplies
+        // the sampled irradiance by the splat albedo, so a value close to 0.9
+        // keeps colours readable without dramatically overexposing them.
+        var pixel: [UInt8] = [230, 230, 230, 255]
         let region = MTLRegionMake2D(0, 0, 1, 1)
         pixel.withUnsafeBytes { bytes in
             for slice in 0..<6 {
@@ -171,7 +175,10 @@ public class SplatRenderer {
         }
         texture.label = "SplatRendererFallbackBRDFLUT"
 
-        var pixel: [UInt8] = [0, 0]
+        // Match the neutral environment map by defaulting the BRDF LUT to a
+        // value that keeps the diffuse term untouched and avoids introducing
+        // spurious specular highlights.
+        var pixel: [UInt8] = [255, 0]
         let region = MTLRegionMake2D(0, 0, 1, 1)
         pixel.withUnsafeBytes { bytes in
             texture.replace(region: region,
