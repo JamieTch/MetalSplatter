@@ -193,7 +193,7 @@ public struct SplatScenePoint {
         self.normal = normal.normalizedOrDefault(Self.defaultNormal)
     }
 
-    var linearNormalized: SplatScenePoint {
+    public var linearNormalized: SplatScenePoint {
         SplatScenePoint(position: position,
                         color: .linearFloat(color.asLinearFloat),
                         opacity: .linearFloat(opacity.asLinearFloat),

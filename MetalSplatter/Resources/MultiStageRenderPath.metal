@@ -1,4 +1,25 @@
 #include "SplatProcessing.h"
+#include <metal_math>
+
+// Debug visualization selector:
+// 0: coverage (alpha), 1: albedo, 2: normal, 3: roughness, 4: metallic, 5: AO, 6: depth, 7: shaded (default)
+#ifndef DEBUG_VIEW
+#define DEBUG_VIEW 1
+#endif
+
+// ---- Normal decoding controls (tweak and rebuild) ----
+#ifndef NORMAL_STORAGE_01
+#define NORMAL_STORAGE_01 0   // 1: incoming normal stored in [0,1] -> remap to [-1,1]; 0: already in [-1,1]
+#endif
+#ifndef NORMAL_FLIP_X
+#define NORMAL_FLIP_X 0
+#endif
+#ifndef NORMAL_FLIP_Y
+#define NORMAL_FLIP_Y 0
+#endif
+#ifndef NORMAL_FLIP_Z
+#define NORMAL_FLIP_Z 0
+#endif
 
 typedef struct
 {
@@ -61,7 +82,7 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
                                                      FragmentValues previousFragmentValues [[imageblock_data]]) {
     FragmentStore out;
 
-    half alpha = splatFragmentAlpha(in.relativePosition, in.color.a);
+    half alpha = splatFragmentAlpha(in.relativePosition, in.color.a); // restored: use real coverage
     if (alpha <= 0) {
         out.values = previousFragmentValues;
         return out;
@@ -107,62 +128,257 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     return out;
 }
 
+// sRGB to Linear helper (for debug/diagnostic use)
+inline half3 srgbToLinear(half3 c) {
+    half3 lo = c / 12.92h;
+    half3 hi = pow(max(half3(0), (c + 0.055h) / 1.055h), half3(2.4h));
+    return mix(lo, hi, step(0.04045h, c));
+}
+
+inline half3 remap01ToN11(half3 v) { return v * 2.0h - 1.0h; }
+
+inline half3 applyNormalFlips(half3 n) {
+#if NORMAL_FLIP_X
+    n.x = -n.x;
+#endif
+#if NORMAL_FLIP_Y
+    n.y = -n.y;
+#endif
+#if NORMAL_FLIP_Z
+    n.z = -n.z;
+#endif
+    return n;
+}
+
+inline half3 decodeNormal(half3 src) {
+#if NORMAL_STORAGE_01
+    half3 n = remap01ToN11(src);
+#else
+    half3 n = src;
+#endif
+    n = applyNormalFlips(n);
+    return normalize(n);
+}
+
 inline half4 resolveFragmentValues(FragmentValues fragmentValues,
-                                   texturecube<half> environmentMap,
-                                   texture2d<half> brdfLUT,
-                                   sampler environmentSampler,
-                                   sampler brdfSampler) {
+                                   texturecube<half> environmentMap [[texture(0)]],
+                                   texture2d<half> brdfLUT [[texture(1)]],
+                                   sampler environmentSampler [[sampler(0)]],
+                                   sampler brdfSampler [[sampler(1)]]) {
     half accumulatedAlpha = fragmentValues.viewAlpha.w;
     if (accumulatedAlpha <= 0) {
         return half4(0);
     }
 
     half invAlpha = half(1.0) / accumulatedAlpha;
-    half3 albedo = half3(fragmentValues.albedoMetallic.xyz * invAlpha);
-    half metallic = fragmentValues.albedoMetallic.w * invAlpha;
-    half3 normal = half3(fragmentValues.normalRoughness.xyz * invAlpha);
-    half roughness = fragmentValues.normalRoughness.w * invAlpha;
-    half3 viewDirection = half3(fragmentValues.viewAlpha.xyz * invAlpha);
-    half ao = fragmentValues.ambientOcclusion.x * invAlpha;
+    half3 albedo     = half3(fragmentValues.albedoMetallic.xyz * invAlpha);
+    half  metallic   =        fragmentValues.albedoMetallic.w   * invAlpha;
+    half3 normal     = half3(fragmentValues.normalRoughness.xyz * invAlpha);
+    half  roughness  =        fragmentValues.normalRoughness.w   * invAlpha;
+    half3 viewDir    = half3(fragmentValues.viewAlpha.xyz        * invAlpha);
+    half  ao         =        fragmentValues.ambientOcclusion.x  * invAlpha;
 
+    // Clamp and normalize core material inputs for stability during debugging
+    albedo    = clamp(albedo,   0.0h, 1.0h);
+    metallic  = clamp(metallic, 0.0h, 1.0h);
+    roughness = clamp(roughness,0.0h, 1.0h);
+
+    // Compute raw-as-is and decoded normals
+    half3 normal_raw = normalize(normal);
+    half3 normal_dec = decodeNormal(normal);
+
+#if DEBUG_VIEW == 1
+    // Albedo
+    return half4(albedo, 1);
+#elif DEBUG_VIEW == 2
+    // Normal (visualized as 0..1)
+    return half4(normalize(normal) * 0.5h + 0.5h, 1);
+#elif DEBUG_VIEW == 3
+    // Roughness
+    return half4(roughness, roughness, roughness, 1);
+#elif DEBUG_VIEW == 4
+    // Metallic
+    return half4(metallic, metallic, metallic, 1);
+#elif DEBUG_VIEW == 5
+    // Ambient occlusion
+    return half4(ao, ao, ao, 1);
+#elif DEBUG_VIEW == 21
+    // Albedo visualized after sRGB->linear conversion (diagnostic)
+    return half4(srgbToLinear(albedo), 1);
+#elif DEBUG_VIEW == 22
+    // Roughness (duplicate of 3, kept for explicit material sweep)
+    return half4(roughness, roughness, roughness, 1);
+#elif DEBUG_VIEW == 23
+    // Metallic (duplicate of 4, kept for explicit material sweep)
+    return half4(metallic, metallic, metallic, 1);
+#elif DEBUG_VIEW == 24
+    // Normal (duplicate of 2, kept for explicit material sweep)
+    return half4(normal_dec * 0.5h + 0.5h, 1);
+#elif DEBUG_VIEW == 25
+    // Raw-as-is normal visualization (before decode)
+    return half4(normal_raw * 0.5h + 0.5h, 1);
+#elif DEBUG_VIEW == 26
+    // Difference heatmap between decoded and raw normals
+    {
+        half3 diff = abs(normal_dec - normal_raw);
+        return half4(diff, 1);
+    }
+#elif DEBUG_VIEW == 27
+    // N·V comparison: R=using decoded normal, G=using raw normal
+    {
+        half3 V = normalize(viewDir);
+        half ndv_dec = saturate(dot(normal_dec, V));
+        half ndv_raw = saturate(dot(normal_raw, V));
+        return half4(ndv_dec, ndv_raw, 0.0h, 1);
+    }
+#elif DEBUG_VIEW == 8
+    // Shaded result with AO forced to 1 (tests if AO is zeroing energy)
+    {
+        half3 shaded = shadeGaussian(albedo,
+                                     metallic,
+                                     roughness,
+                                     normal_dec,
+                                     viewDir,
+                                     half(1.0),   // force AO = 1
+                                     environmentMap,
+                                     brdfLUT,
+                                     environmentSampler,
+                                     brdfSampler);
+        return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+    }
+#elif DEBUG_VIEW == 9
+    // Direct environment reflection sample (tests env binding/indices)
+    {
+        half3 N = normalize(normal);
+        half3 V = normalize(viewDir);
+        half3 R = reflect(-V, N);
+        half3 env = environmentMap.sample(environmentSampler, float3(R)).rgb;
+        return half4(env, 1);
+    }
+#elif DEBUG_VIEW == 10
+    // N·V visualization (tests geometry/normal-view relationship)
+    {
+        half3 N = normalize(normal);
+        half3 V = normalize(viewDir);
+        half ndv = saturate(dot(N, V));
+        return half4(ndv, ndv, ndv, 1);
+    }
+#elif DEBUG_VIEW == 12
+    // Simple Lambert with a fixed key light (no env/BRDF) to prove shading path works
+    {
+        half3 N = normalize(normal);
+        half3 L = normalize(half3(0.4h, 0.8h, 0.4h));
+        half ndl = saturate(dot(N, L));
+        half3 lit = albedo * ndl;
+        return half4(lit * accumulatedAlpha, accumulatedAlpha);
+    }
+#elif DEBUG_VIEW == 13
+    // BRDF LUT debug: show LUT sample at center to validate BRDF binding
+    {
+        half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
+        return half4(l.x, l.y, 0, 1);
+    }
+#elif DEBUG_VIEW == 7
+    // Shaded result (uses environment)
     half3 shaded = shadeGaussian(albedo,
                                  metallic,
                                  roughness,
-                                 normal,
-                                 viewDirection,
+                                 normal_dec,
+                                 viewDir,
                                  ao,
                                  environmentMap,
                                  brdfLUT,
                                  environmentSampler,
                                  brdfSampler);
-
     return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+#else
+    // Coverage and depth handled in postprocess
+    return half4(0);
+#endif
 }
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
-                                               texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
-                                               texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
-                                               sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
-                                               sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
-    FragmentOut out;
-    half accumulatedAlpha = fragmentValues.viewAlpha.w;
-    out.depth = (accumulatedAlpha == 0) ? 0 : fragmentValues.depth / accumulatedAlpha;
-    out.color = resolveFragmentValues(fragmentValues,
-                                      environmentMap,
-                                      brdfLUT,
-                                      environmentSampler,
-                                      brdfSampler);
-    return out;
+                                               texturecube<half> environmentMap [[texture(0)]],
+                                               texture2d<half> brdfLUT [[texture(1)]],
+                                               sampler environmentSampler [[sampler(0)]],
+                                               sampler brdfSampler [[sampler(1)]]) {
+    {
+        FragmentOut out;
+        half accumulatedAlpha = fragmentValues.viewAlpha.w;
+        out.depth = (accumulatedAlpha == 0) ? 0 : fragmentValues.depth / accumulatedAlpha;
+
+#if DEBUG_VIEW == 0
+        // Coverage view (grayscale alpha)
+        half a = clamp(accumulatedAlpha, 0.0h, 1.0h);
+        out.color = half4(a, a, a, 1);
+        return out;
+#elif DEBUG_VIEW == 6
+        // Depth visualization mapped to [0,1]
+        half d = half(out.depth);
+        out.color = half4(d, d, d, 1);
+        return out;
+#elif DEBUG_VIEW == 11
+        // Direct environment sample (panorama from screen UV -> direction), ignores accumulation
+        {
+            // Map NDC to [0,1]
+            float2 uv = float2((fragmentValues.viewAlpha.x + 1.0f) * 0.5f, (fragmentValues.viewAlpha.y + 1.0f) * 0.5f);
+            // Equirectangular-like mapping to direction (yaw=pitch)
+            float phi = (uv.x * 2.0f - 1.0f) * M_PI_F;        // -pi..pi
+            float theta = (uv.y * 1.0f - 0.5f) * M_PI_F;      // -pi/2..pi/2
+            float3 dir = float3(cos(theta) * sin(phi), sin(theta), cos(theta) * cos(phi));
+            half3 env = environmentMap.sample(environmentSampler, dir).rgb;
+            out.color = half4(env, 1);
+            return out;
+        }
+#elif DEBUG_VIEW == 14
+        // Env sample at fixed direction, forced LOD 0
+        {
+            float3 dir = float3(0.0, 1.0, 0.0);
+            half3 env = environmentMap.sample(environmentSampler, dir, level(0.0)).rgb;
+            out.color = half4(env, 1);
+            return out;
+        }
+#elif DEBUG_VIEW == 15
+        // Env sample at fixed direction, largest mip (very blurred)
+        {
+            float3 dir = float3(0.0, 1.0, 0.0);
+            float maxLevel = log2((float)environmentMap.get_width());
+            half3 env = environmentMap.sample(environmentSampler, dir, level(maxLevel)).rgb;
+            out.color = half4(env, 1);
+            return out;
+        }
+#else
+        // Use resolveFragmentValues for attribute views or shaded output
+        out.color = resolveFragmentValues(fragmentValues,
+                                          environmentMap,
+                                          brdfLUT,
+                                          environmentSampler,
+                                          brdfSampler);
+        return out;
+#endif
+    }
 }
 
 fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[imageblock_data]],
-                                               texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
-                                               texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
-                                               sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
-                                               sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
-    return resolveFragmentValues(fragmentValues,
-                                 environmentMap,
-                                 brdfLUT,
-                                 environmentSampler,
-                                 brdfSampler);
+                                               texturecube<half> environmentMap [[texture(0)]],
+                                               texture2d<half> brdfLUT [[texture(1)]],
+                                               sampler environmentSampler [[sampler(0)]],
+                                               sampler brdfSampler [[sampler(1)]]) {
+    {
+        // No depth resolve path — choose debug view or shaded like the main postprocess
+#if DEBUG_VIEW == 0
+        // Coverage is not available without depth resolve; show AO as a proxy
+        half a = fragmentValues.ambientOcclusion.x;
+        return half4(a, a, a, 1);
+#elif DEBUG_VIEW == 6
+        // No depth resolve here; return black
+        return half4(0,0,0,1);
+#else
+        return resolveFragmentValues(fragmentValues,
+                                     environmentMap,
+                                     brdfLUT,
+                                     environmentSampler,
+                                     brdfSampler);
+#endif
+    }
 }

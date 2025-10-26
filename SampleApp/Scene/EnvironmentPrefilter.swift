@@ -47,6 +47,7 @@ final class EnvironmentPrefilter {
     private let specularPipeline: MTLComputePipelineState
     private let diffusePipeline: MTLComputePipelineState
     private let brdfPipeline: MTLComputePipelineState
+    private let linearClampSampler: MTLSamplerState
 
     private let targetMapSize: Int
     private let diffuseSampleCount: UInt32
@@ -87,9 +88,25 @@ final class EnvironmentPrefilter {
         specularPipeline = try device.makeComputePipelineState(function: specularFunction)
         diffusePipeline = try device.makeComputePipelineState(function: diffuseFunction)
         brdfPipeline = try device.makeComputePipelineState(function: brdfFunction)
+
+        let sdesc = MTLSamplerDescriptor()
+        sdesc.minFilter = .linear
+        sdesc.magFilter = .linear
+        sdesc.mipFilter = .linear
+        sdesc.sAddressMode = .clampToEdge
+        sdesc.tAddressMode = .clampToEdge
+        sdesc.rAddressMode = .clampToEdge
+        sdesc.lodMinClamp = 0
+        sdesc.lodMaxClamp = Float(mapSize)
+        guard let sampler = device.makeSamplerState(descriptor: sdesc) else {
+            throw Error.missingPipeline(function: "sampler")
+        }
+        self.linearClampSampler = sampler
     }
 
     func prefilter(snapshot: EnvironmentProbeManager.Snapshot) throws -> EnvironmentPrefilterResult {
+        Self.log.debug("[Prefilter] begin (snapshot rev: \(snapshot.revision), ts: \(snapshot.timestamp)) src type=\(snapshot.texture.textureType.rawValue) fmt=\(snapshot.texture.pixelFormat.rawValue) size=\(snapshot.texture.width)x\(snapshot.texture.height)x\(snapshot.texture.depth) mips=\(snapshot.texture.mipmapLevelCount)")
+
         guard snapshot.texture.textureType == .typeCube else {
             throw Error.unsupportedTextureType(snapshot.texture.textureType)
         }
@@ -97,9 +114,108 @@ final class EnvironmentPrefilter {
         guard let sourceTexture = sanitizedSourceTexture(from: snapshot.texture) else {
             throw Error.unsupportedPixelFormat(snapshot.texture.pixelFormat)
         }
+        Self.log.debug("[Prefilter] using source texture view: type=\(sourceTexture.textureType.rawValue) fmt=\(sourceTexture.pixelFormat.rawValue) size=\(sourceTexture.width)x\(sourceTexture.height)x\(sourceTexture.depth) mips=\(sourceTexture.mipmapLevelCount)")
 
         let environmentTexture = try makeEnvironmentTexture()
+        Self.log.debug("[Prefilter] made destination cube: label=\(environmentTexture.label ?? "<none>") type=\(environmentTexture.textureType.rawValue) fmt=\(environmentTexture.pixelFormat.rawValue) size=\(environmentTexture.width)x\(environmentTexture.height)x\(environmentTexture.depth) mips=\(environmentTexture.mipmapLevelCount)")
+
         try encodePrefilter(from: sourceTexture, to: environmentTexture)
+
+        // DEBUG: Probe the prefiltered destination cube for non-zero energy at LOD 0 and max LOD
+        if let cb = commandQueue.makeCommandBuffer(),
+           let blit = cb.makeBlitCommandEncoder() {
+            let dstMipCount = environmentTexture.mipmapLevelCount
+            let dstLOD0W = max(1, min(4, environmentTexture.width))
+            let dstLOD0H = max(1, min(4, environmentTexture.height))
+            let dstMaxLOD = max(0, dstMipCount - 1)
+            let dstMaxW = max(1, environmentTexture.width >> dstMaxLOD)
+            let dstMaxH = max(1, environmentTexture.height >> dstMaxLOD)
+
+            func makeStaging(_ w: Int, _ h: Int) -> MTLTexture? {
+                let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: environmentTexture.pixelFormat, width: w, height: h, mipmapped: false)
+                d.storageMode = .shared
+                return device.makeTexture(descriptor: d)
+            }
+
+            guard let stagingLOD0 = makeStaging(dstLOD0W, dstLOD0H),
+                  let stagingMax = makeStaging(dstMaxW, dstMaxH) else {
+                Self.log.error("[Prefilter] Failed to create staging textures for dst probe")
+                throw Error.commandBufferFailed
+            }
+
+            // Copy face +X, LOD 0
+            let origin = MTLOrigin(x: 0, y: 0, z: 0)
+            let sizeLOD0 = MTLSize(width: dstLOD0W, height: dstLOD0H, depth: 1)
+            blit.copy(from: environmentTexture,
+                      sourceSlice: 0,
+                      sourceLevel: 0,
+                      sourceOrigin: origin,
+                      sourceSize: sizeLOD0,
+                      to: stagingLOD0,
+                      destinationSlice: 0,
+                      destinationLevel: 0,
+                      destinationOrigin: origin)
+
+            // Copy face +X, max LOD
+            let sizeMax = MTLSize(width: dstMaxW, height: dstMaxH, depth: 1)
+            blit.copy(from: environmentTexture,
+                      sourceSlice: 0,
+                      sourceLevel: dstMaxLOD,
+                      sourceOrigin: origin,
+                      sourceSize: sizeMax,
+                      to: stagingMax,
+                      destinationSlice: 0,
+                      destinationLevel: 0,
+                      destinationOrigin: origin)
+
+            blit.endEncoding()
+            cb.commit()
+            cb.waitUntilCompleted()
+
+            func anyNonZero(_ tex: MTLTexture) -> Bool {
+                let bpp: Int
+                switch tex.pixelFormat {
+                case .rgba16Float: bpp = 8
+                case .rgba32Float: bpp = 16
+                case .rg16Float:   bpp = 4
+                case .rg32Float:   bpp = 8
+                default:           bpp = 8
+                }
+                let row = tex.width * bpp
+                let count = row * tex.height
+                var buf = [UInt8](repeating: 0, count: count)
+                buf.withUnsafeMutableBytes { p in
+                    tex.getBytes(p.baseAddress!, bytesPerRow: row, from: MTLRegionMake2D(0, 0, tex.width, tex.height), mipmapLevel: 0)
+                }
+                return buf.contains { $0 != 0 }
+            }
+
+            let nonZeroLOD0 = anyNonZero(stagingLOD0)
+            let nonZeroMax  = anyNonZero(stagingMax)
+            if nonZeroLOD0 { Self.log.debug("[Prefilter] DST probe LOD0 is NON-zero") } else { Self.log.warning("[Prefilter] DST probe LOD0 is all zeros") }
+            if nonZeroMax  { Self.log.debug("[Prefilter] DST probe max LOD is NON-zero") } else { Self.log.warning("[Prefilter] DST probe max LOD is all zeros") }
+
+            // TEMP: If both are zero, copy a 1x1 from the source smallest mip into destination smallest mip to validate writes
+            if !nonZeroLOD0 && !nonZeroMax {
+                if let cb2 = commandQueue.makeCommandBuffer(), let blit2 = cb2.makeBlitCommandEncoder() {
+                    let srcMinLevel = max(0, sourceTexture.mipmapLevelCount - 1)
+                    let dstMinLevel = max(0, environmentTexture.mipmapLevelCount - 1)
+                    let sz = MTLSize(width: 1, height: 1, depth: 1)
+                    blit2.copy(from: sourceTexture,
+                               sourceSlice: 0,
+                               sourceLevel: srcMinLevel,
+                               sourceOrigin: origin,
+                               sourceSize: sz,
+                               to: environmentTexture,
+                               destinationSlice: 0,
+                               destinationLevel: dstMinLevel,
+                               destinationOrigin: origin)
+                    blit2.endEncoding(); cb2.commit(); cb2.waitUntilCompleted()
+                    Self.log.warning("[Prefilter] Wrote a 1x1 texel from source(min mip) to destination(min mip) for validation")
+                }
+            }
+        }
+
         let brdf = try makeBRDFLookupTexture()
 
         return EnvironmentPrefilterResult(environmentMap: environmentTexture,
@@ -145,6 +261,7 @@ final class EnvironmentPrefilter {
         }
         texture.label = "PrefilteredBRDFLUT"
 
+        Self.log.debug("[BRDF] integrating LUT: size=\(self.brdfResolution)x\(self.brdfResolution) fmt=\(texture.pixelFormat.rawValue)")
         try encodeBRDF(into: texture)
         cachedBRDFLUT = texture
         return texture
@@ -155,29 +272,48 @@ final class EnvironmentPrefilter {
             throw Error.missingCommandQueue
         }
         commandBuffer.label = "EnvironmentPrefilter"
+        Self.log.debug("[Prefilter] encode start: src type=\(source.textureType.rawValue) fmt=\(source.pixelFormat.rawValue) dst type=\(destination.textureType.rawValue) fmt=\(destination.pixelFormat.rawValue) mips=\(destination.mipmapLevelCount)")
+
+        commandBuffer.addCompletedHandler { cb in
+            if cb.status == .error {
+                if let e = cb.error as NSError? {
+                    Self.log.error("[Prefilter] command buffer error: domain=\(e.domain) code=\(e.code) userInfo=\(e.userInfo)")
+                } else {
+                    Self.log.error("[Prefilter] command buffer error with no NSError")
+                }
+            }
+        }
 
         let mipCount = destination.mipmapLevelCount
         var dimension = destination.width
-        let uniformBuffer = device.makeBuffer(length: MemoryLayout<PrefilterUniforms>.stride,
-                                              options: .storageModeShared)
-        let diffuseBuffer = device.makeBuffer(length: MemoryLayout<DiffuseUniforms>.stride,
-                                              options: .storageModeShared)
 
         for mipLevel in 0..<mipCount {
             let encoder = commandBuffer.makeComputeCommandEncoder()
             encoder?.label = "SpecularPrefilterMip\(mipLevel)"
             encoder?.setComputePipelineState(specularPipeline)
+
+            // Primary expectation: source@0, dest@1, sampler@0
             encoder?.setTexture(source, index: 0)
             encoder?.setTexture(destination, index: 1)
+            encoder?.setSamplerState(linearClampSampler, index: 0)
+            // Also bind duplicates at alt indices in case the compiled kernel expects them swapped or shifted
+            encoder?.setTexture(source, index: 2)
+            encoder?.setTexture(destination, index: 3)
+            encoder?.setSamplerState(linearClampSampler, index: 1)
 
-            var uniforms = PrefilterUniforms(mipLevel: UInt32(mipLevel),
-                                             dimension: UInt32(dimension),
-                                             roughness: Float(mipCount <= 1 ? 0 : Float(mipLevel) / Float(mipCount - 1)),
-                                             sampleCount: specularSampleCount)
-            if let buffer = uniformBuffer {
-                memcpy(buffer.contents(), &uniforms, MemoryLayout<PrefilterUniforms>.stride)
-                encoder?.setBuffer(buffer, offset: 0, index: 0)
-            }
+            Self.log.debug("[Prefilter] specular mip=\(mipLevel) dim=\(dimension) dispatch=\(max(1, (dimension + 7) / 8))x\(max(1, (dimension + 7) / 8)) faces=6")
+
+            // Bind per-dispatch uniforms for this mip via setBytes (avoids stale buffer contents)
+            var u = PrefilterUniforms(
+                mipLevel: UInt32(mipLevel),
+                dimension: UInt32(dimension),
+                roughness: Float(mipCount <= 1 ? 0 : Float(mipLevel) / Float(mipCount - 1)),
+                sampleCount: specularSampleCount
+            )
+            encoder?.setBytes(&u, length: MemoryLayout<PrefilterUniforms>.stride, index: 0)
+            // Duplicate at index 1 to tolerate alternate kernel signatures
+            encoder?.setBytes(&u, length: MemoryLayout<PrefilterUniforms>.stride, index: 1)
+            Self.log.debug("[Prefilter] specular uniforms mip=\(u.mipLevel) dim=\(u.dimension) rough=\(u.roughness) samples=\(u.sampleCount)")
 
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
             let threadgroups = MTLSize(width: max(1, (dimension + 7) / 8),
@@ -189,19 +325,21 @@ final class EnvironmentPrefilter {
             dimension = max(1, dimension >> 1)
         }
 
-        if let diffuseBuffer, mipCount > 0 {
+        if mipCount > 0 {
             let diffuseEncoder = commandBuffer.makeComputeCommandEncoder()
             diffuseEncoder?.label = "DiffusePrefilter"
             diffuseEncoder?.setComputePipelineState(diffusePipeline)
             diffuseEncoder?.setTexture(source, index: 0)
             diffuseEncoder?.setTexture(destination, index: 1)
+            diffuseEncoder?.setSamplerState(linearClampSampler, index: 0)
             let diffuseMipLevel = mipCount - 1
             let diffuseDimension = max(1, destination.width >> diffuseMipLevel)
-            var uniforms = DiffuseUniforms(mipLevel: UInt32(diffuseMipLevel),
-                                           dimension: UInt32(diffuseDimension),
-                                           sampleCount: diffuseSampleCount)
-            memcpy(diffuseBuffer.contents(), &uniforms, MemoryLayout<DiffuseUniforms>.stride)
-            diffuseEncoder?.setBuffer(diffuseBuffer, offset: 0, index: 0)
+            var du = DiffuseUniforms(mipLevel: UInt32(diffuseMipLevel),
+                                     dimension: UInt32(diffuseDimension),
+                                     sampleCount: diffuseSampleCount)
+            diffuseEncoder?.setBytes(&du, length: MemoryLayout<DiffuseUniforms>.stride, index: 0)
+            diffuseEncoder?.setBytes(&du, length: MemoryLayout<DiffuseUniforms>.stride, index: 1)
+            Self.log.debug("[Prefilter] diffuse bind: src@0 dst@1 smp@0 uniforms@0&1 mip=\(diffuseMipLevel) dim=\(diffuseDimension)")
             let threadsPerGroup = MTLSize(width: 1, height: 1, depth: 1)
             let threadgroups = MTLSize(width: diffuseDimension,
                                        height: diffuseDimension,
@@ -212,6 +350,9 @@ final class EnvironmentPrefilter {
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+
+        let status = commandBuffer.status
+        Self.log.info("[Prefilter] completed (mips: \(mipCount)) status=\(status.rawValue)")
 
         if commandBuffer.status == .error {
             let description = commandBuffer.error?.localizedDescription ?? "unknown"
@@ -238,6 +379,8 @@ final class EnvironmentPrefilter {
                                               options: .storageModeShared)
         encoder?.setBuffer(uniformBuffer, offset: 0, index: 0)
 
+        Self.log.debug("[BRDF] dispatch: groups=\((self.brdfResolution + 7) / 8)x\((self.brdfResolution + 7) / 8) threads=8x8")
+
         let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
         let threadgroups = MTLSize(width: (brdfResolution + 7) / 8,
                                    height: (brdfResolution + 7) / 8,
@@ -247,6 +390,8 @@ final class EnvironmentPrefilter {
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+
+        Self.log.info("[BRDF] completed status=\(commandBuffer.status.rawValue)")
 
         if commandBuffer.status == .error {
             Self.log.error("BRDF integration command buffer failed: \(commandBuffer.error?.localizedDescription ?? "unknown")")

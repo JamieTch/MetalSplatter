@@ -71,6 +71,12 @@ class VisionSceneRenderer {
     private var lastBindingSkipReason: EnvironmentBindingSkipReason?
     private var fallbackFrameStreak: Int = 0
     private var didEscalateFallback: Bool = false
+    // Debug/telemetry extensions
+    private var frameCounter: UInt64 = 0
+    private var didLogTargetFormats: Bool = false
+    private var didAutoCapture: Bool = false
+    private var captureNextFrame: Bool = false
+    private var lastBrightnessProbeFrame: UInt64 = 0
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -179,11 +185,128 @@ class VisionSceneRenderer {
             }
             let screenSize = SIMD2(x: Int(view.textureMap.viewport.width),
                                    y: Int(view.textureMap.viewport.height))
+            // Matrix sanity checks (log only when invalid)
+            if !Self.isFinite(projMatrixSIMD) || !Self.isFinite(userViewpointMatrix) {
+                Self.log.error("Non-finite matrix detected (proj finite: \(Self.isFinite(projMatrixSIMD)), view finite: \(Self.isFinite(userViewpointMatrix)))")
+            }
             return ModelRendererViewportDescriptor(viewport: view.textureMap.viewport,
                                                    projectionMatrix: projMatrixSIMD,
                                                    viewMatrix: userViewpointMatrix * translationMatrix * rotationMatrix * commonUpCalibration,
                                                    screenSize: screenSize)
         }
+    }
+
+    private func logRenderTargetFormatsOnce(for drawable: LayerRenderer.Drawable) {
+        guard !didLogTargetFormats else { return }
+        didLogTargetFormats = true
+        let cfg = layerRenderer.configuration
+        let colorFormat = cfg.colorFormat
+        let depthFormat = cfg.depthFormat
+        let viewCount = drawable.views.count
+        let colorTex = drawable.colorTextures.first
+        let depthTex = drawable.depthTextures.first
+        // Convert MTLPixelFormat and other enums to String to satisfy os.Logger interpolation
+        let colorFormatStr = String(describing: colorFormat)
+        let depthFormatStr = String(describing: depthFormat)
+        let colorTexPFStr = String(describing: colorTex?.pixelFormat)
+        let depthTexPFStr = String(describing: depthTex?.pixelFormat)
+        Self.log.info("Render target formats: cfg.color=\(colorFormatStr) cfg.depth=\(depthFormatStr) drawable.color[0]=\(colorTexPFStr) drawable.depth[0]=\(depthTexPFStr) views=\(viewCount) layout=\(cfg.layout.rawValue)")
+    }
+
+    private func probeBrightnessIfNeeded(drawable: LayerRenderer.Drawable, commandBuffer: MTLCommandBuffer) {
+        // Run at most once every ~60 frames
+        guard frameCounter - lastBrightnessProbeFrame >= 60 else { return }
+        lastBrightnessProbeFrame = frameCounter
+        guard let colorTex = drawable.colorTextures.first else { return }
+
+        // Only probe formats we can trivially inspect
+        switch colorTex.pixelFormat {
+        case .rgba16Float, .bgra8Unorm, .rgba8Unorm, .bgra8Unorm_srgb, .rgba8Unorm_srgb:
+            break
+        default:
+            let pf = String(describing: colorTex.pixelFormat)
+            Self.log.debug("Brightness probe skipped for unsupported pixel format \(pf)")
+            return
+        }
+
+        let w = min(8, colorTex.width)
+        let h = min(8, colorTex.height)
+
+        // Create a small SHARED staging texture to allow CPU readback
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: colorTex.pixelFormat,
+                                                            width: w, height: h, mipmapped: false)
+        desc.storageMode = .shared
+        // No .blit usage exists; blit operations don't require a usage flag.
+        // Keep shader usages only if you plan to bind this texture in shaders; otherwise, [] is fine.
+        desc.usage = [.shaderRead, .shaderWrite]
+        guard let staging = device.makeTexture(descriptor: desc) else {
+            Self.log.error("Brightness probe: failed to create staging texture")
+            return
+        }
+
+        // Copy a top-left region from the render target into the staging texture
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            Self.log.error("Brightness probe: failed to create blit encoder")
+            return
+        }
+        let origin = MTLOrigin(x: 0, y: 0, z: 0)
+        let size   = MTLSize(width: w, height: h, depth: 1)
+        blit.copy(from: colorTex,
+                  sourceSlice: 0,
+                  sourceLevel: 0,
+                  sourceOrigin: origin,
+                  sourceSize: size,
+                  to: staging,
+                  destinationSlice: 0,
+                  destinationLevel: 0,
+                  destinationOrigin: origin)
+        blit.endEncoding()
+
+        // Read back on completion (after GPU finishes blit)
+        let frameAtEnqueue = frameCounter
+        commandBuffer.addCompletedHandler { _ in
+            let w = staging.width
+            let h = staging.height
+            let bytesPerPixel: Int = (staging.pixelFormat == .rgba16Float) ? 8 : 4 // RGBA16F=8 bytes/px, 8-bit=4
+            let row = w * bytesPerPixel
+            let count = row * h
+            let ptr = UnsafeMutableRawPointer.allocate(byteCount: count, alignment: 64)
+            defer { ptr.deallocate() }
+            staging.getBytes(ptr,
+                             bytesPerRow: row,
+                             from: MTLRegionMake2D(0, 0, w, h),
+                             mipmapLevel: 0)
+
+            // Cheap non-zero check
+            var anyNonZero = false
+            let buf = ptr.bindMemory(to: UInt8.self, capacity: count)
+            for i in 0..<count where buf[i] != 0 {
+                anyNonZero = true
+                break
+            }
+            if anyNonZero {
+                Self.log.debug("Brightness probe: 8x8 region NON-zero (frame \(frameAtEnqueue))")
+            } else {
+                Self.log.warning("Brightness probe: 8x8 region all zeros (frame \(frameAtEnqueue))")
+            }
+        }
+    }
+
+    private func scheduleAutoMetalCaptureIfNeeded() {
+#if DEBUG
+        guard !didAutoCapture else { return }
+        captureNextFrame = true
+        Self.log.info("Auto Metal capture scheduled for next frame (fallback persisted)")
+#endif
+    }
+
+    private static func isFinite(_ m: simd_float4x4) -> Bool {
+        for r in 0..<4 {
+            for c in 0..<4 {
+                if !m[r][c].isFinite { return false }
+            }
+        }
+        return true
     }
 
     private func updateRotation() {
@@ -198,6 +321,7 @@ class VisionSceneRenderer {
 
     func renderFrame() {
         guard let frame = layerRenderer.queryNextFrame() else { return }
+        frameCounter &+= 1
 
         frame.startUpdate()
         frame.endUpdate()
@@ -210,6 +334,27 @@ class VisionSceneRenderer {
         }
 
         guard let drawable = frame.queryDrawable() else { return }
+        logRenderTargetFormatsOnce(for: drawable)
+
+#if DEBUG
+        if captureNextFrame, !didAutoCapture {
+            captureNextFrame = false
+            let mgr = MTLCaptureManager.shared()
+            let desc = MTLCaptureDescriptor()
+            desc.captureObject = commandQueue
+            do {
+                try mgr.startCapture(with: desc)
+                Self.log.info("Metal capture started for this frame")
+                commandBuffer.addCompletedHandler { _ in
+                    MTLCaptureManager.shared().stopCapture()
+                    Self.log.info("Metal capture stopped")
+                }
+                didAutoCapture = true
+            } catch {
+                Self.log.error("Failed to start Metal capture: \(error.localizedDescription)")
+            }
+        }
+#endif
 
         _ = inFlightSemaphore.wait(timeout: DispatchTime.distantFuture)
 
@@ -231,6 +376,8 @@ class VisionSceneRenderer {
 
         let viewports = self.viewports(drawable: drawable, deviceAnchor: deviceAnchor)
 
+        probeBrightnessIfNeeded(drawable: drawable, commandBuffer: commandBuffer)
+
         do {
             try modelRenderer?.render(viewports: viewports,
                                       colorTexture: drawable.colorTextures[0],
@@ -240,7 +387,10 @@ class VisionSceneRenderer {
                                       renderTargetArrayLength: layerRenderer.configuration.layout == .layered ? drawable.views.count : 1,
                                       to: commandBuffer)
         } catch {
-            Self.log.error("Unable to render scene: \(error.localizedDescription)")
+            let cfg = layerRenderer.configuration
+            let colorFormatStr = String(describing: cfg.colorFormat)
+            let depthFormatStr = String(describing: cfg.depthFormat)
+            Self.log.error("Unable to render scene: \(error.localizedDescription). colorFormat=\(colorFormatStr) depthFormat=\(depthFormatStr) views=\(drawable.views.count) frame=\(self.frameCounter)")
         }
 
         if let splatRenderer = modelRenderer as? SplatRenderer {
@@ -344,15 +494,20 @@ class VisionSceneRenderer {
 
         let diagnostics = environmentProbeManager.diagnostics()
         let latestResultRevision = environmentPrefilterResult?.revision
-        let timestamp = environmentPrefilterResult?.timestamp.flatMap { Self.iso8601Formatter.string(from: $0) } ?? "nil"
-        let snapshotTimestamp = diagnostics.latestSnapshotTimestamp.flatMap { Self.iso8601Formatter.string(from: $0) } ?? "nil"
+        // environmentPrefilterResult?.timestamp is a non-optional Date inside an optional container.
+        let timestamp = environmentPrefilterResult
+            .map { Self.iso8601Formatter.string(from: $0.timestamp) } ?? "nil"
+        // diagnostics.latestSnapshotTimestamp is Optional<Date>, so map it directly.
+        let snapshotTimestamp = diagnostics.latestSnapshotTimestamp
+            .map { Self.iso8601Formatter.string(from: $0) } ?? "nil"
         let prefilterDurationMS = lastPrefilterDuration * 1000.0
         let formattedDuration = String(format: "%.2f", prefilterDurationMS)
-        Self.log.warning("Renderer bound fallback materials (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Prefilter latest revision: \(latestPrefilterRevision), applied revision: \(lastAppliedEnvironmentRevision), current result revision: \(latestResultRevision.map(String.init) ?? "nil"), result timestamp: \(timestamp), resourcesDirty: \(environmentResourcesDirty), pending snapshot revision: \(diagnostics.pendingSnapshotRevision.map(String.init) ?? "nil"), delivered revision: \(diagnostics.deliveredRevision), latest snapshot timestamp: \(snapshotTimestamp), probe running: \(diagnostics.isRunning), last prefilter duration: \(formattedDuration) ms")
+        Self.log.warning("Renderer bound fallback materials (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Prefilter latest revision: \(self.latestPrefilterRevision), applied revision: \(self.lastAppliedEnvironmentRevision), current result revision: \(latestResultRevision.map(String.init) ?? "nil"), result timestamp: \(timestamp), resourcesDirty: \(self.environmentResourcesDirty), pending snapshot revision: \(diagnostics.pendingSnapshotRevision.map(String.init) ?? "nil"), delivered revision: \(diagnostics.deliveredRevision), latest snapshot timestamp: \(snapshotTimestamp), probe running: \(diagnostics.isRunning), last prefilter duration: \(formattedDuration) ms, frame: \(self.frameCounter)")
 
         if fallbackFrameStreak >= TelemetryConstants.fallbackEscalationFrameThreshold && !didEscalateFallback {
             didEscalateFallback = true
-            Self.log.error("Fallback environment resources persisted for \(fallbackFrameStreak) consecutive frames")
+            scheduleAutoMetalCaptureIfNeeded()
+            Self.log.error("Fallback environment resources persisted for \(self.fallbackFrameStreak) consecutive frames")
 #if DEBUG
             assertionFailure("SplatRenderer is still using fallback environment resources after \(fallbackFrameStreak) frames")
 #endif
@@ -362,7 +517,7 @@ class VisionSceneRenderer {
     private func resetFallbackTrackingIfNeeded(didResolve: Bool) {
         guard fallbackFrameStreak != 0 || didEscalateFallback else { return }
         if didResolve {
-            Self.log.info("Fallback environment bindings resolved after \(fallbackFrameStreak) frames")
+            Self.log.info("Fallback environment bindings resolved after \(self.fallbackFrameStreak) frames")
         }
         fallbackFrameStreak = 0
         didEscalateFallback = false
@@ -405,7 +560,7 @@ class VisionSceneRenderer {
         case .resultMissing:
             Self.log.debug("Skipping environment binding: prefilter result unavailable")
         case .notDirty:
-            Self.log.debug("Skipping environment binding: environment resources are up to date (applied revision: \(lastAppliedEnvironmentRevision))")
+            Self.log.debug("Skipping environment binding: environment resources are up to date (applied revision: \(self.lastAppliedEnvironmentRevision))")
         }
     }
 
@@ -441,4 +596,3 @@ class VisionSceneRenderer {
 }
 
 #endif // os(visionOS)
-

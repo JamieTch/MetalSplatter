@@ -28,7 +28,7 @@ public class SplatRenderer {
         // with effectively no memory penalty compated to instancing, and slightly better performance than even using all indexing.
         static let maxIndexedSplatCount = 1024
 
-        static let tileSize = MTLSize(width: 32, height: 32, depth: 1)
+        static let tileSize = MTLSize(width: 16, height: 16, depth: 1)
     }
 
     private static let log =
@@ -86,7 +86,7 @@ public class SplatRenderer {
         SIMD4(
             sanitizeScalar(vector.x, defaultValue: defaultValue.x, field: "\(field).x", pointIndex: pointIndex),
             sanitizeScalar(vector.y, defaultValue: defaultValue.y, field: "\(field).y", pointIndex: pointIndex),
-            sanitizeScalar(vector.z, defaultValue: defaultValue.z, field: "\(field).z", pointIndex: pointIndex),
+            sanitizeScalar(vector.z, defaultValue: defaultValue.z, field: "\(field).z", pointIndex: Int(pointIndex)),
             sanitizeScalar(vector.w, defaultValue: defaultValue.w, field: "\(field).w", pointIndex: pointIndex)
         )
     }
@@ -665,6 +665,10 @@ public class SplatRenderer {
         try add([ point ])
     }
 
+    private enum TelemetryConstants {
+        static let fallbackEscalationFrameThreshold: UInt32 = 120
+    }
+
     public struct MaterialFallbackTelemetry {
         public var environmentFallbackBindings: UInt32
         public var brdfFallbackBindings: UInt32
@@ -678,8 +682,12 @@ public class SplatRenderer {
 
     public private(set) var materialFallbackTelemetry = MaterialFallbackTelemetry()
 
+    public var automaticallyLogsFallbackTelemetry = true
+
     private var didLogEnvironmentFallbackThisFrame = false
     private var didLogBRDFFallbackThisFrame = false
+    private var fallbackFrameStreak: UInt32 = 0
+    private var didEscalateFallback = false
 
     private func beginTelemetryFrame() {
         materialFallbackTelemetry = MaterialFallbackTelemetry()
@@ -724,10 +732,87 @@ public class SplatRenderer {
             }
         }
 
+        // Unconditional detailed logging of the textures we are about to bind (helps verify content/type)
+        let envIdx = TextureIndex.environment.rawValue
+        let brdfIdx = TextureIndex.brdf.rawValue
+        func describe(_ tex: MTLTexture?) -> String {
+            guard let t = tex else { return "nil" }
+            return "label=\(t.label ?? "<none>") type=\(t.textureType.rawValue) fmt=\(t.pixelFormat.rawValue) size=\(t.width)x\(t.height)x\(t.depth) array=\(t.arrayLength) mips=\(t.mipmapLevelCount) storage=\(t.storageMode.rawValue) usage=\(t.usage.rawValue)"
+        }
+        Self.log.debug("[bindMaterialResources] env slot=\(envIdx) tex { \(describe(environmentTexture)) }")
+        Self.log.debug("[bindMaterialResources] brdf slot=\(brdfIdx) tex { \(describe(brdfTexture)) }")
+
+        // Log fragment binding indices to verify shader <-> Swift agreement
+        Self.log.debug("Binding env cube at frag slot \(TextureIndex.environment.rawValue), BRDF LUT at slot \(TextureIndex.brdf.rawValue)")
         renderEncoder.setFragmentTexture(environmentTexture, index: TextureIndex.environment.rawValue)
+        Self.log.debug("[bindMaterialResources] setFragmentTexture env at slot \(envIdx)")
         renderEncoder.setFragmentTexture(brdfTexture, index: TextureIndex.brdf.rawValue)
+        Self.log.debug("[bindMaterialResources] setFragmentTexture brdf at slot \(brdfIdx)")
         renderEncoder.setFragmentSamplerState(environmentSamplerState, index: SamplerIndex.environment.rawValue)
         renderEncoder.setFragmentSamplerState(brdfSamplerState, index: SamplerIndex.brdf.rawValue)
+    }
+
+    // Moved out to class scope: probe a single texel from the environment cube to verify non-zero content.
+    // Copies face 0, mip 0, texel (0,0) into a 1x1 shared staging texture and logs whether it's non-zero.
+    private func debugProbeEnvironmentTexel(commandBuffer: MTLCommandBuffer) {
+        guard let env = environmentMapTexture else {
+            Self.log.warning("[EnvProbe] environmentMapTexture is nil")
+            return
+        }
+        // Only support common float formats here
+        switch env.pixelFormat {
+        case .rgba16Float, .rgba32Float, .rg16Float, .rg32Float:
+            break
+        default:
+            Self.log.debug("[EnvProbe] Skipping probe for unsupported pixel format \(env.pixelFormat.rawValue)")
+            return
+        }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: env.pixelFormat, width: 1, height: 1, mipmapped: false)
+        desc.storageMode = .shared
+        // No .blit usage; blit encoders can still copy to/from textures.
+        desc.usage = [.shaderRead, .shaderWrite]
+        guard let staging = device.makeTexture(descriptor: desc) else {
+            Self.log.error("[EnvProbe] Failed to create staging texture")
+            return
+        }
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            Self.log.error("[EnvProbe] Failed to create blit encoder")
+            return
+        }
+        let origin = MTLOrigin(x: 0, y: 0, z: 0)
+        let size = MTLSize(width: 1, height: 1, depth: 1)
+        // Probe face 0 (positive X) level 0
+        blit.copy(from: env,
+                  sourceSlice: 0,
+                  sourceLevel: 0,
+                  sourceOrigin: origin,
+                  sourceSize: size,
+                  to: staging,
+                  destinationSlice: 0,
+                  destinationLevel: 0,
+                  destinationOrigin: origin)
+        blit.endEncoding()
+        commandBuffer.addCompletedHandler { _ in
+            let bytesPerPixel: Int
+            switch staging.pixelFormat {
+            case .rgba16Float: bytesPerPixel = 8
+            case .rg16Float:   bytesPerPixel = 4
+            case .rgba32Float: bytesPerPixel = 16
+            case .rg32Float:   bytesPerPixel = 8
+            default:           bytesPerPixel = 8
+            }
+            var storage = [UInt8](repeating: 0, count: bytesPerPixel)
+            storage.withUnsafeMutableBytes { ptr in
+                staging.getBytes(ptr.baseAddress!, bytesPerRow: bytesPerPixel,
+                                 from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+            }
+            let nonZero = storage.contains { $0 != 0 }
+            if nonZero {
+                Self.log.debug("[EnvProbe] Face0 LOD0 texel (0,0) appears NON-zero: \(storage)")
+            } else {
+                Self.log.warning("[EnvProbe] Face0 LOD0 texel (0,0) is all zeros")
+            }
+        }
     }
 
     private func updateUniforms(forViewports viewports: [ViewportDescriptor],
@@ -907,6 +992,7 @@ public class SplatRenderer {
             renderEncoder.setRenderPipelineState(postprocessPipelineState)
             renderEncoder.setDepthStencilState(postprocessDepthState)
             renderEncoder.setCullMode(.none)
+            Self.log.debug("Postprocess: binding material resources before draw")
             bindMaterialResources(to: renderEncoder)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             renderEncoder.popDebugGroup()
@@ -915,6 +1001,61 @@ public class SplatRenderer {
         }
 
         renderEncoder.endEncoding()
+
+        // Probe one env texel to verify content (must occur outside any active encoder)
+        debugProbeEnvironmentTexel(commandBuffer: commandBuffer)
+
+        emitFallbackTelemetryIfNeeded()
+    }
+
+    private func emitFallbackTelemetryIfNeeded() {
+        guard automaticallyLogsFallbackTelemetry else { return }
+
+        let telemetry = materialFallbackTelemetry
+        let usedEnvironmentFallback = telemetry.environmentFallbackBindings > 0
+        let usedBRDFFallback = telemetry.brdfFallbackBindings > 0
+
+        guard usedEnvironmentFallback || usedBRDFFallback else {
+            guard fallbackFrameStreak != 0 else { return }
+            Self.log.info("Fallback material bindings resolved after \(self.self.fallbackFrameStreak) frame(s)")
+            fallbackFrameStreak = 0
+            didEscalateFallback = false
+            return
+        }
+
+        fallbackFrameStreak &+= 1
+
+        var reasons: [String] = []
+        if usedEnvironmentFallback {
+            if environmentMapTexture == nil {
+                reasons.append("environmentMapTexture was nil")
+            } else {
+                reasons.append("environment map texture was invalid")
+            }
+        }
+        if usedBRDFFallback {
+            if brdfLookupTexture == nil {
+                reasons.append("brdfLookupTexture was nil")
+            } else {
+                reasons.append("BRDF lookup texture was invalid")
+            }
+        }
+
+        let reasonSummary: String
+        if reasons.isEmpty {
+            reasonSummary = "material resources were missing or invalid"
+        } else {
+            reasonSummary = reasons.joined(separator: "; ")
+        }
+        Self.log.warning("Renderer bound fallback material resources this frame (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Reason: \(reasonSummary). Provide valid textures using setEnvironmentMap(_:) and setBRDFLookupTexture(_:).")
+
+        if fallbackFrameStreak >= TelemetryConstants.fallbackEscalationFrameThreshold && !didEscalateFallback {
+            didEscalateFallback = true
+            Self.log.error("Fallback material resources persisted for \(self.self.fallbackFrameStreak) consecutive frames")
+#if DEBUG
+            assertionFailure("Fallback material resources persisted for \(fallbackFrameStreak) consecutive frames")
+#endif
+        }
     }
 
     // Sort splatBuffer (read-only), storing the results in splatBuffer (write-only) then swap splatBuffer and splatBufferPrime

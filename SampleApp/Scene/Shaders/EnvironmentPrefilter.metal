@@ -1,6 +1,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// Temporary diagnostic: set to 1 to force a solid color write into specular mip 0 to verify write path
+#ifndef PREFILTER_DIAG
+#define PREFILTER_DIAG 0
+#endif
+
 struct PrefilterUniforms {
     uint mipLevel;
     uint dimension;
@@ -94,6 +99,25 @@ kernel void prefilterEnvironmentSpecular(texturecube<float, access::sample> sour
     if (gid.x >= uniforms.dimension || gid.y >= uniforms.dimension || gid.z >= 6) {
         return;
     }
+
+#if PREFILTER_DIAG == 1
+    if (uniforms.mipLevel == 0) {
+        // Solid red only for mip 0
+        destination.write(half4(1.0h, 0.0h, 0.0h, 1.0h), uint2(gid.xy), gid.z, uniforms.mipLevel);
+        return;
+    }
+#elif PREFILTER_DIAG == 2
+    {
+        // Distinct pattern for ALL mips and faces so we can verify full coverage.
+        // R encodes mip (brighter for lower mips), G encodes face index, B encodes u coordinate.
+        float2 uv_dbg = (float2(gid.xy) + 0.5f) / float(max(1u, uniforms.dimension));
+        half r = half(1.0f / (1.0f + float(uniforms.mipLevel)));
+        half g = half(float(gid.z) / 5.0f);
+        half b = half(uv_dbg.x);
+        destination.write(half4(r, g, b, 1.0h), uint2(gid.xy), gid.z, uniforms.mipLevel);
+        return;
+    }
+#endif
 
     constexpr sampler cubeSampler(filter::linear, address::clamp_to_edge);
 
