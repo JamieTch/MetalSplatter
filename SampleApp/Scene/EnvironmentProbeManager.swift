@@ -107,10 +107,22 @@ final class EnvironmentProbeManager: NSObject {
     }
 
     private func waitUntilProvidersRunning() async {
+        let start = Date()
+        var lastLoggedStates: (world: WorldTrackingProvider.State, environment: EnvironmentLightEstimationProvider.State)?
+
         while worldTracking.state != .running || environmentLightEstimation.state != .running {
+            let currentStates = (worldTracking.state, environmentLightEstimation.state)
+            if lastLoggedStates?.world != currentStates.0 || lastLoggedStates?.environment != currentStates.1 {
+                Self.log.debug("Waiting for providers to run (world tracking state: \(String(describing: currentStates.0)), environment light estimation state: \(String(describing: currentStates.1)))")
+                lastLoggedStates = currentStates
+            }
+
             try? await Task.sleep(nanoseconds: 50_000_000)
             if Task.isCancelled { return }
         }
+
+        let waitDuration = Date().timeIntervalSince(start)
+        Self.log.debug("Environment providers are running (waited \(String(format: \"%.2f\", waitDuration))s)")
     }
 
     private func handleAnchorUpdate(_ update: AnchorUpdate<EnvironmentProbeAnchor>) {
