@@ -13,6 +13,14 @@ final class EnvironmentProbeManager: NSObject {
         let sphericalHarmonics: [Float]
     }
 
+    struct Diagnostics {
+        let latestSnapshotRevision: UInt64?
+        let deliveredRevision: UInt64
+        let pendingSnapshotRevision: UInt64?
+        let latestSnapshotTimestamp: Date?
+        let isRunning: Bool
+    }
+
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "EnvironmentProbeManager",
                                      category: "EnvironmentProbe")
 
@@ -67,6 +75,18 @@ final class EnvironmentProbeManager: NSObject {
             guard snapshot.revision != deliveredRevision else { return nil }
             deliveredRevision = snapshot.revision
             return snapshot
+        }
+    }
+
+    func diagnostics() -> Diagnostics {
+        stateQueue.sync {
+            let latestRevision = latestSnapshot?.revision
+            let pendingRevision = latestRevision != deliveredRevision ? latestRevision : nil
+            return Diagnostics(latestSnapshotRevision: latestRevision,
+                               deliveredRevision: deliveredRevision,
+                               pendingSnapshotRevision: pendingRevision,
+                               latestSnapshotTimestamp: latestSnapshot?.timestamp,
+                               isRunning: isRunning)
         }
     }
 

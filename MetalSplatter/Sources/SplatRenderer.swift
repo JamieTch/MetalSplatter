@@ -2,6 +2,9 @@ import Foundation
 import Metal
 import MetalKit
 import os
+#if canImport(os.signpost)
+import os.signpost
+#endif
 import simd
 import SplatIO
 
@@ -31,6 +34,9 @@ public class SplatRenderer {
     private static let log =
         Logger(subsystem: Bundle.module.bundleIdentifier!,
                category: "SplatRenderer")
+#if canImport(os.signpost)
+    private static let signposter = OSSignposter(logger: log)
+#endif
 
     public enum Error: Swift.Error, LocalizedError {
         case invalidMaterialResource(resource: String, reason: String)
@@ -659,6 +665,36 @@ public class SplatRenderer {
         try add([ point ])
     }
 
+    private enum TelemetryConstants {
+        static let fallbackEscalationFrameThreshold: UInt32 = 120
+    }
+
+    public struct MaterialFallbackTelemetry {
+        public var environmentFallbackBindings: UInt32
+        public var brdfFallbackBindings: UInt32
+
+        public init(environmentFallbackBindings: UInt32 = 0,
+                    brdfFallbackBindings: UInt32 = 0) {
+            self.environmentFallbackBindings = environmentFallbackBindings
+            self.brdfFallbackBindings = brdfFallbackBindings
+        }
+    }
+
+    public private(set) var materialFallbackTelemetry = MaterialFallbackTelemetry()
+
+    public var automaticallyLogsFallbackTelemetry = true
+
+    private var didLogEnvironmentFallbackThisFrame = false
+    private var didLogBRDFFallbackThisFrame = false
+    private var fallbackFrameStreak: UInt32 = 0
+    private var didEscalateFallback = false
+
+    private func beginTelemetryFrame() {
+        materialFallbackTelemetry = MaterialFallbackTelemetry()
+        didLogEnvironmentFallbackThisFrame = false
+        didLogBRDFFallbackThisFrame = false
+    }
+
     private func switchToNextDynamicBuffer() {
         uniformBufferIndex = (uniformBufferIndex + 1) % maxSimultaneousRenders
         uniformBufferOffset = UniformsArray.alignedSize * uniformBufferIndex
@@ -666,8 +702,36 @@ public class SplatRenderer {
     }
 
     private func bindMaterialResources(to renderEncoder: MTLRenderCommandEncoder) {
-        let environmentTexture = environmentMapTexture ?? fallbackEnvironmentMap
-        let brdfTexture = brdfLookupTexture ?? fallbackBRDFLUT
+        let environmentTexture: MTLTexture
+        if let environmentMapTexture {
+            environmentTexture = environmentMapTexture
+        } else {
+            environmentTexture = fallbackEnvironmentMap
+            materialFallbackTelemetry.environmentFallbackBindings &+= 1
+            if !didLogEnvironmentFallbackThisFrame {
+                didLogEnvironmentFallbackThisFrame = true
+                Self.log.notice("Binding fallback environment map texture")
+#if canImport(os.signpost)
+                Self.signposter.emitEvent("FallbackEnvironmentMapBound")
+#endif
+            }
+        }
+
+        let brdfTexture: MTLTexture
+        if let brdfLookupTexture {
+            brdfTexture = brdfLookupTexture
+        } else {
+            brdfTexture = fallbackBRDFLUT
+            materialFallbackTelemetry.brdfFallbackBindings &+= 1
+            if !didLogBRDFFallbackThisFrame {
+                didLogBRDFFallbackThisFrame = true
+                Self.log.notice("Binding fallback BRDF lookup texture")
+#if canImport(os.signpost)
+                Self.signposter.emitEvent("FallbackBRDFLookupBound")
+#endif
+            }
+        }
+
         renderEncoder.setFragmentTexture(environmentTexture, index: TextureIndex.environment.rawValue)
         renderEncoder.setFragmentTexture(brdfTexture, index: TextureIndex.brdf.rawValue)
         renderEncoder.setFragmentSamplerState(environmentSamplerState, index: SamplerIndex.environment.rawValue)
@@ -763,6 +827,8 @@ public class SplatRenderer {
                        rasterizationRateMap: MTLRasterizationRateMap?,
                        renderTargetArrayLength: Int,
                        to commandBuffer: MTLCommandBuffer) throws {
+        beginTelemetryFrame()
+
         let splatCount = splatBuffer.count
         guard splatBuffer.count != 0 else { return }
         let indexedSplatCount = min(splatCount, Constants.maxIndexedSplatCount)
@@ -857,6 +923,58 @@ public class SplatRenderer {
         }
 
         renderEncoder.endEncoding()
+
+        emitFallbackTelemetryIfNeeded()
+    }
+
+    private func emitFallbackTelemetryIfNeeded() {
+        guard automaticallyLogsFallbackTelemetry else { return }
+
+        let telemetry = materialFallbackTelemetry
+        let usedEnvironmentFallback = telemetry.environmentFallbackBindings > 0
+        let usedBRDFFallback = telemetry.brdfFallbackBindings > 0
+
+        guard usedEnvironmentFallback || usedBRDFFallback else {
+            guard fallbackFrameStreak != 0 else { return }
+            Self.log.info("Fallback material bindings resolved after \(fallbackFrameStreak) frame(s)")
+            fallbackFrameStreak = 0
+            didEscalateFallback = false
+            return
+        }
+
+        fallbackFrameStreak &+= 1
+
+        var reasons: [String] = []
+        if usedEnvironmentFallback {
+            if environmentMapTexture == nil {
+                reasons.append("environmentMapTexture was nil")
+            } else {
+                reasons.append("environment map texture was invalid")
+            }
+        }
+        if usedBRDFFallback {
+            if brdfLookupTexture == nil {
+                reasons.append("brdfLookupTexture was nil")
+            } else {
+                reasons.append("BRDF lookup texture was invalid")
+            }
+        }
+
+        let reasonSummary: String
+        if reasons.isEmpty {
+            reasonSummary = "material resources were missing or invalid"
+        } else {
+            reasonSummary = reasons.joined(separator: "; ")
+        }
+        Self.log.warning("Renderer bound fallback material resources this frame (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Reason: \(reasonSummary). Provide valid textures using setEnvironmentMap(_:) and setBRDFLookupTexture(_:).")
+
+        if fallbackFrameStreak >= TelemetryConstants.fallbackEscalationFrameThreshold && !didEscalateFallback {
+            didEscalateFallback = true
+            Self.log.error("Fallback material resources persisted for \(fallbackFrameStreak) consecutive frames")
+#if DEBUG
+            assertionFailure("Fallback material resources persisted for \(fallbackFrameStreak) consecutive frames")
+#endif
+        }
     }
 
     // Sort splatBuffer (read-only), storing the results in splatBuffer (write-only) then swap splatBuffer and splatBufferPrime
