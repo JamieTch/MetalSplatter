@@ -2,6 +2,9 @@ import Foundation
 import Metal
 import MetalKit
 import os
+#if canImport(os.signpost)
+import os.signpost
+#endif
 import simd
 import SplatIO
 
@@ -31,6 +34,9 @@ public class SplatRenderer {
     private static let log =
         Logger(subsystem: Bundle.module.bundleIdentifier!,
                category: "SplatRenderer")
+#if canImport(os.signpost)
+    private static let signposter = OSSignposter(logger: log)
+#endif
 
     public enum Error: Swift.Error, LocalizedError {
         case invalidMaterialResource(resource: String, reason: String)
@@ -659,6 +665,28 @@ public class SplatRenderer {
         try add([ point ])
     }
 
+    public struct MaterialFallbackTelemetry {
+        public var environmentFallbackBindings: UInt32
+        public var brdfFallbackBindings: UInt32
+
+        public init(environmentFallbackBindings: UInt32 = 0,
+                    brdfFallbackBindings: UInt32 = 0) {
+            self.environmentFallbackBindings = environmentFallbackBindings
+            self.brdfFallbackBindings = brdfFallbackBindings
+        }
+    }
+
+    public private(set) var materialFallbackTelemetry = MaterialFallbackTelemetry()
+
+    private var didLogEnvironmentFallbackThisFrame = false
+    private var didLogBRDFFallbackThisFrame = false
+
+    private func beginTelemetryFrame() {
+        materialFallbackTelemetry = MaterialFallbackTelemetry()
+        didLogEnvironmentFallbackThisFrame = false
+        didLogBRDFFallbackThisFrame = false
+    }
+
     private func switchToNextDynamicBuffer() {
         uniformBufferIndex = (uniformBufferIndex + 1) % maxSimultaneousRenders
         uniformBufferOffset = UniformsArray.alignedSize * uniformBufferIndex
@@ -666,8 +694,36 @@ public class SplatRenderer {
     }
 
     private func bindMaterialResources(to renderEncoder: MTLRenderCommandEncoder) {
-        let environmentTexture = environmentMapTexture ?? fallbackEnvironmentMap
-        let brdfTexture = brdfLookupTexture ?? fallbackBRDFLUT
+        let environmentTexture: MTLTexture
+        if let environmentMapTexture {
+            environmentTexture = environmentMapTexture
+        } else {
+            environmentTexture = fallbackEnvironmentMap
+            materialFallbackTelemetry.environmentFallbackBindings &+= 1
+            if !didLogEnvironmentFallbackThisFrame {
+                didLogEnvironmentFallbackThisFrame = true
+                Self.log.notice("Binding fallback environment map texture")
+#if canImport(os.signpost)
+                Self.signposter.emitEvent("FallbackEnvironmentMapBound")
+#endif
+            }
+        }
+
+        let brdfTexture: MTLTexture
+        if let brdfLookupTexture {
+            brdfTexture = brdfLookupTexture
+        } else {
+            brdfTexture = fallbackBRDFLUT
+            materialFallbackTelemetry.brdfFallbackBindings &+= 1
+            if !didLogBRDFFallbackThisFrame {
+                didLogBRDFFallbackThisFrame = true
+                Self.log.notice("Binding fallback BRDF lookup texture")
+#if canImport(os.signpost)
+                Self.signposter.emitEvent("FallbackBRDFLookupBound")
+#endif
+            }
+        }
+
         renderEncoder.setFragmentTexture(environmentTexture, index: TextureIndex.environment.rawValue)
         renderEncoder.setFragmentTexture(brdfTexture, index: TextureIndex.brdf.rawValue)
         renderEncoder.setFragmentSamplerState(environmentSamplerState, index: SamplerIndex.environment.rawValue)
@@ -763,6 +819,8 @@ public class SplatRenderer {
                        rasterizationRateMap: MTLRasterizationRateMap?,
                        renderTargetArrayLength: Int,
                        to commandBuffer: MTLCommandBuffer) throws {
+        beginTelemetryFrame()
+
         let splatCount = splatBuffer.count
         guard splatBuffer.count != 0 else { return }
         let indexedSplatCount = min(splatCount, Constants.maxIndexedSplatCount)
