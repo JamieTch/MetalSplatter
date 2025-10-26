@@ -1,5 +1,6 @@
 #if os(visionOS)
 
+import ARKit
 import CompositorServices
 import Metal
 import MetalSplatter
@@ -36,6 +37,14 @@ class VisionSceneRenderer {
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
 
+    private let environmentProbeManager: EnvironmentProbeManager
+    private let environmentPrefilter: EnvironmentPrefilter?
+    private var environmentPrefilterResult: EnvironmentPrefilterResult?
+    private var environmentResourcesDirty = false
+    private var latestPrefilterRevision: UInt64 = 0
+    private var lastAppliedEnvironmentRevision: UInt64 = 0
+    private var lastPrefilterDuration: TimeInterval = 0
+
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
         self.device = layerRenderer.device
@@ -43,12 +52,23 @@ class VisionSceneRenderer {
 
         worldTracking = WorldTrackingProvider()
         arSession = ARKitSession()
+        environmentProbeManager = EnvironmentProbeManager(device: device)
+        do {
+            environmentPrefilter = try EnvironmentPrefilter(device: device)
+        } catch {
+            Self.log.error("Failed to initialize environment prefilter: \(error.localizedDescription)")
+            environmentPrefilter = nil
+        }
     }
 
     func load(_ model: ModelIdentifier?) async throws {
         guard model != self.model else { return }
         self.model = model
 
+        if let splat = modelRenderer as? SplatRenderer {
+            try? splat.setEnvironmentMap(nil)
+            try? splat.setBRDFLookupTexture(nil)
+        }
         modelRenderer = nil
         switch model {
         case .gaussianSplat(let url):
@@ -60,6 +80,10 @@ class VisionSceneRenderer {
                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await splat.read(from: url)
             modelRenderer = splat
+            if environmentPrefilterResult != nil {
+                environmentResourcesDirty = true
+                lastAppliedEnvironmentRevision = 0
+            }
         case .sampleBox:
             modelRenderer = try! SampleBoxRenderer(device: device,
                                                    colorFormat: layerRenderer.configuration.colorFormat,
@@ -79,6 +103,8 @@ class VisionSceneRenderer {
             } catch {
                 fatalError("Failed to initialize ARSession")
             }
+
+            environmentProbeManager.start()
 
             let renderThread = Thread {
                 self.renderLoop()
@@ -171,6 +197,8 @@ class VisionSceneRenderer {
         }
 
         updateRotation()
+        updateEnvironmentProbeIfNeeded()
+        applyEnvironmentResourcesIfNeeded()
 
         let viewports = self.viewports(drawable: drawable, deviceAnchor: deviceAnchor)
 
@@ -207,6 +235,47 @@ class VisionSceneRenderer {
                 }
             }
         }
+    }
+
+    private func updateEnvironmentProbeIfNeeded() {
+        guard let snapshot = environmentProbeManager.consumeLatestSnapshot() else { return }
+        guard snapshot.revision != latestPrefilterRevision else { return }
+        guard let prefilter = environmentPrefilter else {
+            Self.log.error("Environment prefilter unavailable when probe revision \(snapshot.revision) arrived")
+            return
+        }
+
+        do {
+            let start = Date()
+            let result = try prefilter.prefilter(snapshot: snapshot)
+            latestPrefilterRevision = snapshot.revision
+            environmentPrefilterResult = result
+            environmentResourcesDirty = true
+            lastPrefilterDuration = Date().timeIntervalSince(start)
+            let durationMS = lastPrefilterDuration * 1000.0
+            Self.log.debug("Prefiltered environment revision \(snapshot.revision) in \(durationMS) ms")
+        } catch {
+            Self.log.error("Failed to prefilter environment map: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyEnvironmentResourcesIfNeeded() {
+        guard environmentResourcesDirty,
+              let result = environmentPrefilterResult,
+              let splatRenderer = modelRenderer as? SplatRenderer else { return }
+
+        do {
+            try splatRenderer.setEnvironmentMap(result.environmentMap)
+            try splatRenderer.setBRDFLookupTexture(result.brdfLookup)
+            environmentResourcesDirty = false
+            lastAppliedEnvironmentRevision = result.revision
+        } catch {
+            Self.log.error("Unable to bind environment resources: \(error.localizedDescription)")
+        }
+    }
+
+    deinit {
+        environmentProbeManager.stop()
     }
 }
 
