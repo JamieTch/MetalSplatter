@@ -2,6 +2,7 @@
 
 import ARKit
 import CompositorServices
+import Foundation
 import Metal
 import MetalSplatter
 import os
@@ -21,6 +22,27 @@ class VisionSceneRenderer {
     private static let log =
         Logger(subsystem: Bundle.main.bundleIdentifier!,
                category: "VisionSceneRenderer")
+    private static let iso8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private enum ProbeGuardReason: Equatable {
+        case noSnapshot
+        case staleRevision(UInt64)
+        case prefilterUnavailable(UInt64)
+    }
+
+    private enum EnvironmentBindingSkipReason: Equatable {
+        case rendererUnavailable
+        case resultMissing
+        case notDirty
+    }
+
+    private enum TelemetryConstants {
+        static let fallbackEscalationFrameThreshold = 120
+    }
 
     let layerRenderer: LayerRenderer
     let device: MTLDevice
@@ -45,6 +67,10 @@ class VisionSceneRenderer {
     private var latestPrefilterRevision: UInt64 = 0
     private var lastAppliedEnvironmentRevision: UInt64 = 0
     private var lastPrefilterDuration: TimeInterval = 0
+    private var lastProbeGuardReason: ProbeGuardReason?
+    private var lastBindingSkipReason: EnvironmentBindingSkipReason?
+    private var fallbackFrameStreak: Int = 0
+    private var didEscalateFallback: Bool = false
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -217,6 +243,12 @@ class VisionSceneRenderer {
             Self.log.error("Unable to render scene: \(error.localizedDescription)")
         }
 
+        if let splatRenderer = modelRenderer as? SplatRenderer {
+            inspectMaterialFallbackTelemetry(from: splatRenderer)
+        } else {
+            resetFallbackTrackingIfNeeded(didResolve: fallbackFrameStreak > 0)
+        }
+
         drawable.encodePresent(commandBuffer: commandBuffer)
 
         commandBuffer.commit()
@@ -241,10 +273,18 @@ class VisionSceneRenderer {
     }
 
     private func updateEnvironmentProbeIfNeeded() {
-        guard let snapshot = environmentProbeManager.consumeLatestSnapshot() else { return }
-        guard snapshot.revision != latestPrefilterRevision else { return }
+        guard let snapshot = environmentProbeManager.consumeLatestSnapshot() else {
+            logProbeGuardChange(.noSnapshot)
+            return
+        }
+
+        guard snapshot.revision != latestPrefilterRevision else {
+            logProbeGuardChange(.staleRevision(snapshot.revision))
+            return
+        }
+
         guard let prefilter = environmentPrefilter else {
-            Self.log.error("Environment prefilter unavailable when probe revision \(snapshot.revision) arrived")
+            logProbeGuardChange(.prefilterUnavailable(snapshot.revision))
             return
         }
 
@@ -255,17 +295,33 @@ class VisionSceneRenderer {
             environmentPrefilterResult = result
             environmentResourcesDirty = true
             lastPrefilterDuration = Date().timeIntervalSince(start)
+            clearProbeGuardIfNeeded(resumedRevision: snapshot.revision)
             let durationMS = lastPrefilterDuration * 1000.0
-            Self.log.debug("Prefiltered environment revision \(snapshot.revision) in \(durationMS) ms")
+            Self.log.debug("Prefiltered environment revision \(snapshot.revision) in \(durationMS) ms using texture \(Self.describeTexture(snapshot.texture))")
         } catch {
-            Self.log.error("Failed to prefilter environment map: \(error.localizedDescription)")
+            Self.log.error("Failed to prefilter environment map for revision \(snapshot.revision) (texture: \(Self.describeTexture(snapshot.texture))): \(error.localizedDescription)")
         }
     }
 
     private func applyEnvironmentResourcesIfNeeded() {
-        guard environmentResourcesDirty,
-              let result = environmentPrefilterResult,
-              let splatRenderer = modelRenderer as? SplatRenderer else { return }
+        guard environmentResourcesDirty else {
+            logBindingSkip(.notDirty)
+            return
+        }
+
+        guard let result = environmentPrefilterResult else {
+            logBindingSkip(.resultMissing)
+            return
+        }
+
+        guard let splatRenderer = modelRenderer as? SplatRenderer else {
+            logBindingSkip(.rendererUnavailable)
+            return
+        }
+
+        clearBindingSkipIfNeeded()
+
+        Self.log.debug("Applying environment resources revision \(result.revision) (environment: \(Self.describeTexture(result.environmentMap)), brdf: \(Self.describeTexture(result.brdfLookup)))")
 
         do {
             try splatRenderer.setEnvironmentMap(result.environmentMap)
@@ -273,8 +329,110 @@ class VisionSceneRenderer {
             environmentResourcesDirty = false
             lastAppliedEnvironmentRevision = result.revision
         } catch {
-            Self.log.error("Unable to bind environment resources: \(error.localizedDescription)")
+            Self.log.error("Unable to bind environment resources revision \(result.revision): \(error.localizedDescription)")
         }
+    }
+
+    private func inspectMaterialFallbackTelemetry(from renderer: SplatRenderer) {
+        let telemetry = renderer.materialFallbackTelemetry
+        guard telemetry.environmentFallbackBindings > 0 || telemetry.brdfFallbackBindings > 0 else {
+            resetFallbackTrackingIfNeeded(didResolve: fallbackFrameStreak > 0)
+            return
+        }
+
+        fallbackFrameStreak &+= 1
+
+        let diagnostics = environmentProbeManager.diagnostics()
+        let latestResultRevision = environmentPrefilterResult?.revision
+        let timestamp = environmentPrefilterResult?.timestamp.flatMap { Self.iso8601Formatter.string(from: $0) } ?? "nil"
+        let snapshotTimestamp = diagnostics.latestSnapshotTimestamp.flatMap { Self.iso8601Formatter.string(from: $0) } ?? "nil"
+        let prefilterDurationMS = lastPrefilterDuration * 1000.0
+        let formattedDuration = String(format: "%.2f", prefilterDurationMS)
+        Self.log.warning("Renderer bound fallback materials (environment: \(telemetry.environmentFallbackBindings), brdf: \(telemetry.brdfFallbackBindings)). Prefilter latest revision: \(latestPrefilterRevision), applied revision: \(lastAppliedEnvironmentRevision), current result revision: \(latestResultRevision.map(String.init) ?? "nil"), result timestamp: \(timestamp), resourcesDirty: \(environmentResourcesDirty), pending snapshot revision: \(diagnostics.pendingSnapshotRevision.map(String.init) ?? "nil"), delivered revision: \(diagnostics.deliveredRevision), latest snapshot timestamp: \(snapshotTimestamp), probe running: \(diagnostics.isRunning), last prefilter duration: \(formattedDuration) ms")
+
+        if fallbackFrameStreak >= TelemetryConstants.fallbackEscalationFrameThreshold && !didEscalateFallback {
+            didEscalateFallback = true
+            Self.log.error("Fallback environment resources persisted for \(fallbackFrameStreak) consecutive frames")
+#if DEBUG
+            assertionFailure("SplatRenderer is still using fallback environment resources after \(fallbackFrameStreak) frames")
+#endif
+        }
+    }
+
+    private func resetFallbackTrackingIfNeeded(didResolve: Bool) {
+        guard fallbackFrameStreak != 0 || didEscalateFallback else { return }
+        if didResolve {
+            Self.log.info("Fallback environment bindings resolved after \(fallbackFrameStreak) frames")
+        }
+        fallbackFrameStreak = 0
+        didEscalateFallback = false
+    }
+
+    private func logProbeGuardChange(_ reason: ProbeGuardReason) {
+        guard reason != lastProbeGuardReason else { return }
+        lastProbeGuardReason = reason
+        switch reason {
+        case .noSnapshot:
+            Self.log.debug("No environment probe snapshot available yet; waiting for updates")
+        case .staleRevision(let revision):
+            Self.log.debug("Latest environment probe revision \(revision) already prefiltered; skipping reprocessing")
+        case .prefilterUnavailable(let revision):
+            Self.log.error("Environment prefilter unavailable when snapshot revision \(revision) arrived")
+        }
+    }
+
+    private func clearProbeGuardIfNeeded(resumedRevision: UInt64) {
+        guard let reason = lastProbeGuardReason else { return }
+        let description: String
+        switch reason {
+        case .noSnapshot:
+            description = "waiting for initial snapshot"
+        case .staleRevision(let revision):
+            description = "receiving already-processed revision \(revision)"
+        case .prefilterUnavailable(let revision):
+            description = "environment prefilter unavailable for revision \(revision)"
+        }
+        Self.log.debug("Environment probe updates resumed with revision \(resumedRevision) after \(description)")
+        lastProbeGuardReason = nil
+    }
+
+    private func logBindingSkip(_ reason: EnvironmentBindingSkipReason) {
+        guard reason != lastBindingSkipReason else { return }
+        lastBindingSkipReason = reason
+        switch reason {
+        case .rendererUnavailable:
+            Self.log.debug("Skipping environment binding: current renderer is not a SplatRenderer")
+        case .resultMissing:
+            Self.log.debug("Skipping environment binding: prefilter result unavailable")
+        case .notDirty:
+            Self.log.debug("Skipping environment binding: environment resources are up to date (applied revision: \(lastAppliedEnvironmentRevision))")
+        }
+    }
+
+    private func clearBindingSkipIfNeeded() {
+        guard lastBindingSkipReason != nil else { return }
+        lastBindingSkipReason = nil
+        Self.log.debug("Environment resource binding proceeding with new prefilter result")
+    }
+
+    private static func describeTexture(_ texture: MTLTexture) -> String {
+        let label = texture.label ?? "<unlabeled>"
+        let dimensions = "\(texture.width)x\(texture.height)x\(max(texture.depth, 1))"
+        let arrayInfo = texture.arrayLength > 1 ? ", arrayLength: \(texture.arrayLength)" : ""
+        let mipInfo = texture.mipmapLevelCount > 1 ? ", mips: \(texture.mipmapLevelCount)" : ""
+        let usage = textureUsageDescription(texture.usage)
+        let deviceID = ObjectIdentifier(texture.device)
+        return "\(label) [type: \(texture.textureType), pixelFormat: \(texture.pixelFormat), dimensions: \(dimensions)\(arrayInfo)\(mipInfo), storage: \(texture.storageMode), usage: \(usage), device: \(deviceID)]"
+    }
+
+    private static func textureUsageDescription(_ usage: MTLTextureUsage) -> String {
+        var components: [String] = []
+        if usage.contains(.shaderRead) { components.append("shaderRead") }
+        if usage.contains(.shaderWrite) { components.append("shaderWrite") }
+        if usage.contains(.renderTarget) { components.append("renderTarget") }
+        if usage.contains(.pixelFormatView) { components.append("pixelFormatView") }
+        if components.isEmpty { components.append("none") }
+        return components.joined(separator: "|")
     }
 
     deinit {
