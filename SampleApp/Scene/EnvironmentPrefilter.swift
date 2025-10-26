@@ -31,12 +31,27 @@ private struct BRDFUniforms {
 }
 
 final class EnvironmentPrefilter {
-    enum Error: Swift.Error {
+    enum Error: Swift.Error, LocalizedError {
         case missingCommandQueue
         case missingPipeline(function: String)
         case unsupportedTextureType(MTLTextureType)
         case unsupportedPixelFormat(MTLPixelFormat)
         case commandBufferFailed
+        
+        var errorDescription: String? {
+            switch self {
+            case .missingCommandQueue:
+                return "Environment prefilter could not create a Metal command queue."
+            case .missingPipeline(let function):
+                return "Environment prefilter pipeline function '\(function)' could not be created."
+            case .unsupportedTextureType(let type):
+                return "Environment prefilter received unsupported texture type: \(String(describing: type))."
+            case .unsupportedPixelFormat(let format):
+                return "Environment prefilter received unsupported pixel format: \(String(describing: format))."
+            case .commandBufferFailed:
+                return "Environment prefilter command buffer failed to complete successfully."
+            }
+        }
     }
 
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "EnvironmentPrefilter",

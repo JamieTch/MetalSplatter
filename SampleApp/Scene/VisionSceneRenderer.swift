@@ -258,7 +258,7 @@ class VisionSceneRenderer {
             let durationMS = lastPrefilterDuration * 1000.0
             Self.log.debug("Prefiltered environment revision \(snapshot.revision) in \(durationMS) ms")
         } catch {
-            Self.log.error("Failed to prefilter environment map: \(error.localizedDescription)")
+            Self.log.error("Failed to prefilter environment map: \(error.localizedDescription) (\(String(describing: error)))")
         }
     }
 
