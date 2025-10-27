@@ -154,7 +154,8 @@ void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2) {
 
 FragmentIn splatVertex(Splat splat,
                        Uniforms uniforms,
-                       uint relativeVertexIndex) {
+                       uint relativeVertexIndex,
+                       uint splatIndex) {
     FragmentIn out;
 
     float4 viewPosition4 = uniforms.viewMatrix * float4(splat.position, 1);
@@ -185,6 +186,7 @@ FragmentIn splatVertex(Splat splat,
         out.normal = half3(0);
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
+        out.splatIndex = splatIndex;
         return out;
     }
 
@@ -227,6 +229,7 @@ FragmentIn splatVertex(Splat splat,
     float3 cameraPosition = uniforms.cameraPosition.xyz;
     float3 viewDirection = safeNormalize(cameraPosition - worldPosition, float3(0, 0, 1));
     out.viewDirection = viewDirection;
+    out.splatIndex = splatIndex;
     return out;
 }
 

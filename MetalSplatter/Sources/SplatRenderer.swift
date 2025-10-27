@@ -246,6 +246,7 @@ public class SplatRenderer {
     enum BufferIndex: NSInteger {
         case uniforms = 0
         case splat    = 1
+        case sphericalHarmonics = 2
     }
 
     // Keep in sync with Shaders.metal : TextureIndex
@@ -1066,6 +1067,8 @@ public class SplatRenderer {
 
         renderEncoder.setVertexBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setVertexBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
+        renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+        renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
 
         renderEncoder.drawIndexedPrimitives(type: .triangle,
                                             indexCount: indexCount,
@@ -1086,6 +1089,8 @@ public class SplatRenderer {
             renderEncoder.setCullMode(.none)
             Self.log.debug("Postprocess: binding material resources before draw")
             bindMaterialResources(to: renderEncoder)
+            renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+            renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             renderEncoder.popDebugGroup()
         } else {

@@ -4,6 +4,7 @@ vertex FragmentIn singleStageSplatVertexShader(uint vertexID [[vertex_id]],
                                                uint instanceID [[instance_id]],
                                                ushort amplificationID [[amplification_id]],
                                                constant Splat* splatArray [[ buffer(BufferIndexSplat) ]],
+                                               constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
                                                constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     Uniforms uniforms = uniformsArray.uniforms[min(int(amplificationID), kMaxViewCount)];
 
@@ -19,23 +20,28 @@ vertex FragmentIn singleStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.normal = half3(0);
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
+        out.splatIndex = 0;
         return out;
     }
 
     Splat splat = splatArray[splatID];
 
-    return splatVertex(splat, uniforms, vertexID % 4);
+    (void)splatSHArray;
+    return splatVertex(splat, uniforms, vertexID % 4, splatID);
 }
 
 fragment half4 singleStageSplatFragmentShader(FragmentIn in [[stage_in]],
                                              texturecube<half> environmentMap [[texture(TextureIndexEnvironment)]],
                                              texture2d<half> brdfLUT [[texture(TextureIndexBRDF)]],
                                              sampler environmentSampler [[sampler(SamplerIndexEnvironment)]],
-                                             sampler brdfSampler [[sampler(SamplerIndexBRDF)]]) {
+                                             sampler brdfSampler [[sampler(SamplerIndexBRDF)]],
+                                             constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]]) {
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a);
     if (alpha <= 0) {
         return half4(0);
     }
+
+    (void)splatSHArray;
 
     half ao = computeAmbientOcclusion(in.color.a);
     half3 shaded = shadeGaussian(in.albedo,

@@ -55,6 +55,7 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
                                               uint instanceID [[instance_id]],
                                               ushort amplificationID [[amplification_id]],
                                               constant Splat* splatArray [[ buffer(BufferIndexSplat) ]],
+                                              constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
                                               constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     Uniforms uniforms = uniformsArray.uniforms[min(int(amplificationID), kMaxViewCount)];
 
@@ -70,16 +71,19 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.normal = half3(0);
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
+        out.splatIndex = 0;
         return out;
     }
 
     Splat splat = splatArray[splatID];
 
-    return splatVertex(splat, uniforms, vertexID % 4);
+    (void)splatSHArray;
+    return splatVertex(splat, uniforms, vertexID % 4, splatID);
 }
 
 fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
-                                                     FragmentValues previousFragmentValues [[imageblock_data]]) {
+                                                     FragmentValues previousFragmentValues [[imageblock_data]],
+                                                     constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]]) {
     FragmentStore out;
 
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a); // restored: use real coverage
@@ -87,6 +91,8 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
         out.values = previousFragmentValues;
         return out;
     }
+
+    (void)splatSHArray;
 
     half oneMinusAlpha = 1 - alpha;
     half ao = computeAmbientOcclusion(in.color.a);
@@ -125,6 +131,7 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     out.normal = half3(0);
     out.worldPosition = float3(0);
     out.viewDirection = float3(0);
+    out.splatIndex = 0;
     return out;
 }
 
