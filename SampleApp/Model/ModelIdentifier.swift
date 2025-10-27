@@ -7,7 +7,8 @@ enum ModelIdentifier: Equatable, Hashable, Codable, CustomStringConvertible {
     var description: String {
         switch self {
         case .gaussianSplat(let url):
-            "Gaussian Splat: \(url.path)"
+            let filename = url.deletingPathExtension().lastPathComponent
+            return "Gaussian Splat: \(filename)"
         case .sampleBox:
             "Sample Box"
         }
