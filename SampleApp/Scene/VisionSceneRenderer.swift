@@ -368,10 +368,6 @@ class VisionSceneRenderer {
         let now = Date()
         defer { lastRotationUpdateTimestamp = now }
 
-        guard let lastTimestamp = lastRotationUpdateTimestamp else { return }
-
-        let deltaTime = now.timeIntervalSince(lastTimestamp)
-
         handStateLock.lock()
         let handStates = cachedHandStates
         handStateLock.unlock()
@@ -385,10 +381,6 @@ class VisionSceneRenderer {
                 interactionState.singleHandOffset = interactionState.translation - pinchPosition
             } else if pinchedHands.count >= 2 {
                 beginTwoHandGesture(with: handStates)
-            } else {
-                let deltaAngle = Constants.rotationPerSecond * deltaTime
-                let deltaQuat = simd_quatf(angle: Float(deltaAngle.radians), axis: Constants.rotationAxis)
-                interactionState.rotation = deltaQuat * interactionState.rotation
             }
         case .singleHandGrab(let chirality):
             let otherPinchedCount = pinchedHands.count
