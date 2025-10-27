@@ -11,6 +11,7 @@ enum BufferIndex: int32_t
 {
     BufferIndexUniforms = 0,
     BufferIndexSplat    = 1,
+    BufferIndexSphericalHarmonics = 2,
 };
 
 enum TextureIndex: int32_t
@@ -23,6 +24,12 @@ enum SamplerIndex: int32_t
 {
     SamplerIndexEnvironment = 0,
     SamplerIndexBRDF        = 1,
+};
+
+enum SphericalHarmonicsUsageMask : uint
+{
+    SphericalHarmonicsUsageDiffuse  = 1u << 0,
+    SphericalHarmonicsUsageSpecular = 1u << 1,
 };
 
 typedef struct
@@ -40,7 +47,8 @@ typedef struct
      */
     uint splatCount;
     uint indexedSplatCount;
-    uint2 _paddingCounts;
+    uint shCoefficientCount;
+    uint useSHMask;
 } Uniforms;
 
 typedef struct
@@ -63,6 +71,28 @@ typedef struct
 
 typedef struct
 {
+    ushort count;
+    ushort padding;
+    packed_half3 coefficient0;
+    packed_half3 coefficient1;
+    packed_half3 coefficient2;
+    packed_half3 coefficient3;
+    packed_half3 coefficient4;
+    packed_half3 coefficient5;
+    packed_half3 coefficient6;
+    packed_half3 coefficient7;
+    packed_half3 coefficient8;
+    packed_half3 coefficient9;
+    packed_half3 coefficient10;
+    packed_half3 coefficient11;
+    packed_half3 coefficient12;
+    packed_half3 coefficient13;
+    packed_half3 coefficient14;
+    packed_half3 coefficient15;
+} SplatSHCoefficients;
+
+typedef struct
+{
     float4 position [[position]];
     half2 relativePosition; // Ranges from -kBoundsRadius to +kBoundsRadius
     half4 color;
@@ -72,4 +102,7 @@ typedef struct
     half3 normal;
     float3 worldPosition;
     float3 viewDirection;
+    uint  splatIndex;
+    float3 diffuseSH [[flat]];
+    float3 specularSH [[flat]];
 } FragmentIn;

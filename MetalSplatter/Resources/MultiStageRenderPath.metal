@@ -3,9 +3,19 @@
 
 // Debug visualization selector:
 // 0: coverage (alpha), 1: albedo, 2: normal, 3: roughness, 4: metallic, 5: AO, 6: depth, 7: shaded (default)
+// Debug view selection driven by UI (function constant).
+// 28: diffuse SH only, 29: specular SH only
 constant uint DEBUG_VIEW [[function_constant(0)]];
-constant bool DEBUG_VIEW_IS_DEFINED = is_function_constant_defined(DEBUG_VIEW);
-constant uint DEBUG_VIEW_VALUE = DEBUG_VIEW_IS_DEFINED ? DEBUG_VIEW : 1;
+constant bool _DEBUG_VIEW_IS_SET = is_function_constant_defined(DEBUG_VIEW);
+constant uint DEBUG_VIEW_VALUE = _DEBUG_VIEW_IS_SET ? DEBUG_VIEW : 1; // default fallback
+
+// Optional alias so existing code can still read DEBUG_VIEW:
+#define DEBUG_VIEW DEBUG_VIEW_VALUE
+
+// --- Legacy macro-based path (disabled) ---
+// #ifndef DEBUG_VIEW
+// #define DEBUG_VIEW 1
+// #endif
 
 // ---- Normal decoding controls (tweak and rebuild) ----
 #ifndef NORMAL_STORAGE_01
@@ -27,6 +37,8 @@ typedef struct
     half4 normalRoughness [[raster_order_group(0)]];
     half4 viewAlpha [[raster_order_group(0)]];
     half2 ambientOcclusion [[raster_order_group(0)]];
+    half4 diffuseIrradiance [[raster_order_group(0)]];
+    half4 specularRadiance [[raster_order_group(0)]];
     float depth [[raster_order_group(0)]];
 } FragmentValues;
 
@@ -48,6 +60,8 @@ kernel void initializeFragmentStore(imageblock<FragmentValues, imageblock_layout
     values->normalRoughness = half4(0);
     values->viewAlpha = half4(0);
     values->ambientOcclusion = half2(0);
+    values->diffuseIrradiance = half4(0);
+    values->specularRadiance = half4(0);
     values->depth = 0;
 }
 
@@ -55,6 +69,7 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
                                               uint instanceID [[instance_id]],
                                               ushort amplificationID [[amplification_id]],
                                               constant Splat* splatArray [[ buffer(BufferIndexSplat) ]],
+                                              constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
                                               constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     Uniforms uniforms = uniformsArray.uniforms[min(int(amplificationID), kMaxViewCount)];
 
@@ -70,17 +85,35 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.normal = half3(0);
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
+        out.splatIndex = 0;
+        out.diffuseSH = float3(0);
+        out.specularSH = float3(0);
         return out;
     }
 
     Splat splat = splatArray[splatID];
 
-    return splatVertex(splat, uniforms, vertexID % 4);
+    FragmentIn out = splatVertex(splat, uniforms, vertexID % 4, splatID);
+
+    ushort configuredCoefficientCount = ushort(min(uniforms.shCoefficientCount, 16u));
+    SplatSHCoefficients shCoefficients = splatSHArray[splatID];
+    float3 normal = safeNormalize(float3(out.normal), float3(0, 0, 1));
+    float3 viewDirection = safeNormalize(float3(out.viewDirection), float3(0, 0, 1));
+    float3 reflectionDirection = reflect(-viewDirection, normal);
+    out.diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, configuredCoefficientCount, normal);
+    out.specularSH = evaluateSplatSHForSpecular(shCoefficients, configuredCoefficientCount, reflectionDirection);
+
+    return out;
 }
 
 fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
-                                                     FragmentValues previousFragmentValues [[imageblock_data]]) {
+                                                     ushort viewIndex [[render_target_array_index]],
+                                                     FragmentValues previousFragmentValues [[imageblock_data]],
+                                                     constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
+                                                     constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     FragmentStore out;
+
+    (void)splatSHArray;
 
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a); // restored: use real coverage
     if (alpha <= 0) {
@@ -91,15 +124,35 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
     half oneMinusAlpha = 1 - alpha;
     half ao = computeAmbientOcclusion(in.color.a);
 
+    Uniforms uniforms = uniformsArray.uniforms[min(int(viewIndex), kMaxViewCount)];
+    float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
+    float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
+    float3 reflectionDirection = reflect(-viewDirection, normal);
+
+    float3 diffuseSH = in.diffuseSH;
+    float3 specularSH = in.specularSH;
+
+    uint shMask = uniforms.useSHMask;
+    if ((shMask & SphericalHarmonicsUsageDiffuse) == 0) {
+        diffuseSH = float3(0);
+    }
+    if ((shMask & SphericalHarmonicsUsageSpecular) == 0) {
+        specularSH = float3(0);
+    }
+
     half4 albedoMetallic = half4(in.albedo * alpha, in.metallic * alpha);
-    half4 normalRoughness = half4(in.normal * alpha, in.roughness * alpha);
-    half4 viewAlpha = half4(half3(in.viewDirection) * alpha, alpha);
+    half4 normalRoughness = half4(half3(normal) * alpha, in.roughness * alpha);
+    half4 viewAlpha = half4(half3(viewDirection) * alpha, alpha);
     half2 ambientOcclusion = half2(ao * alpha, 0);
+    half4 diffuseIrradiance = half4(half3(diffuseSH) * alpha, half(0));
+    half4 specularRadiance = half4(half3(specularSH) * alpha, half(0));
 
     out.values.albedoMetallic = previousFragmentValues.albedoMetallic * oneMinusAlpha + albedoMetallic;
     out.values.normalRoughness = previousFragmentValues.normalRoughness * oneMinusAlpha + normalRoughness;
     out.values.viewAlpha = previousFragmentValues.viewAlpha * oneMinusAlpha + viewAlpha;
     out.values.ambientOcclusion = previousFragmentValues.ambientOcclusion * oneMinusAlpha + ambientOcclusion;
+    out.values.diffuseIrradiance = previousFragmentValues.diffuseIrradiance * oneMinusAlpha + diffuseIrradiance;
+    out.values.specularRadiance = previousFragmentValues.specularRadiance * oneMinusAlpha + specularRadiance;
 
     float depth = in.position.z;
     out.values.depth = previousFragmentValues.depth * oneMinusAlpha + depth * alpha;
@@ -125,6 +178,9 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     out.normal = half3(0);
     out.worldPosition = float3(0);
     out.viewDirection = float3(0);
+    out.splatIndex = 0;
+    out.diffuseSH = float3(0);
+    out.specularSH = float3(0);
     return out;
 }
 
@@ -171,12 +227,15 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     }
 
     half invAlpha = half(1.0) / accumulatedAlpha;
+    float invAlphaF = float(invAlpha);
     half3 albedo     = half3(fragmentValues.albedoMetallic.xyz * invAlpha);
     half  metallic   =        fragmentValues.albedoMetallic.w   * invAlpha;
     half3 normal     = half3(fragmentValues.normalRoughness.xyz * invAlpha);
     half  roughness  =        fragmentValues.normalRoughness.w   * invAlpha;
     half3 viewDir    = half3(fragmentValues.viewAlpha.xyz        * invAlpha);
     half  ao         =        fragmentValues.ambientOcclusion.x  * invAlpha;
+    float3 diffuseSH = float3(fragmentValues.diffuseIrradiance.xyz) * invAlphaF;
+    float3 specularSH = float3(fragmentValues.specularRadiance.xyz) * invAlphaF;
 
     // Clamp and normalize core material inputs for stability during debugging
     albedo    = clamp(albedo,   0.0h, 1.0h);
@@ -187,38 +246,52 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     half3 normal_raw = normalize(normal);
     half3 normal_dec = decodeNormal(normal);
 
-    if (DEBUG_VIEW_VALUE == 1) {
-        // Albedo
-        return half4(albedo, 1);
-    } else if (DEBUG_VIEW_VALUE == 2) {
-        // Normal (visualized as 0..1)
-        return half4(normalize(normal) * 0.5h + 0.5h, 1);
-    } else if (DEBUG_VIEW_VALUE == 3) {
-        // Roughness
-        return half4(roughness, roughness, roughness, 1);
-    } else if (DEBUG_VIEW_VALUE == 4) {
-        // Metallic
-        return half4(metallic, metallic, metallic, 1);
-    } else if (DEBUG_VIEW_VALUE == 5) {
-        // Ambient occlusion
-        return half4(ao, ao, ao, 1);
-    } else if (DEBUG_VIEW_VALUE == 21) {
-        // Albedo visualized after sRGB->linear conversion (diagnostic)
-        return half4(srgbToLinear(albedo), 1);
-    } else if (DEBUG_VIEW_VALUE == 22) {
-        // Roughness (duplicate of 3, kept for explicit material sweep)
-        return half4(roughness, roughness, roughness, 1);
-    } else if (DEBUG_VIEW_VALUE == 23) {
-        // Metallic (duplicate of 4, kept for explicit material sweep)
-        return half4(metallic, metallic, metallic, 1);
-    } else if (DEBUG_VIEW_VALUE == 24) {
-        // Normal (duplicate of 2, kept for explicit material sweep)
-        return half4(normal_dec * 0.5h + 0.5h, 1);
-    } else if (DEBUG_VIEW_VALUE == 25) {
-        // Raw-as-is normal visualization (before decode)
-        return half4(normal_raw * 0.5h + 0.5h, 1);
-    } else if (DEBUG_VIEW_VALUE == 26) {
-        // Difference heatmap between decoded and raw normals
+// assumes you already defined:
+// constant uint DEBUG_VIEW [[function_constant(0)]];
+// constant bool _DEBUG_VIEW_IS_SET = is_function_constant_defined(DEBUG_VIEW);
+// constant uint DEBUG_VIEW_VALUE = _DEBUG_VIEW_IS_SET ? DEBUG_VIEW : 1;
+
+float3 shadingNormal     = safeNormalize(float3(normal_dec), float3(0, 0, 1));
+float3 shadingView       = safeNormalize(float3(viewDir),    float3(0, 0, 1));
+float3 shadingReflection = reflect(-shadingView, shadingNormal);
+
+// Debug outputs (early returns). If none matches, continue with regular shading below.
+if (DEBUG_VIEW_VALUE == 1) {
+    // Albedo
+    return half4(albedo, 1);
+} else if (DEBUG_VIEW_VALUE == 2) {
+    // Normal (visualized as 0..1)
+    return half4(normalize(normal) * 0.5h + 0.5h, 1);
+} else if (DEBUG_VIEW_VALUE == 3) {
+    // Roughness
+    return half4(roughness, roughness, roughness, 1);
+} else if (DEBUG_VIEW_VALUE == 4) {
+    // Metallic
+    return half4(metallic, metallic, metallic, 1);
+} else if (DEBUG_VIEW_VALUE == 5) {
+    // Ambient occlusion
+    return half4(ao, ao, ao, 1);
+} else if (DEBUG_VIEW_VALUE == 21) {
+    // Albedo after sRGB->linear (diagnostic)
+    return half4(srgbToLinear(albedo), 1);
+} else if (DEBUG_VIEW_VALUE == 22) {
+    // Roughness (duplicate of 3 for sweep)
+    return half4(roughness, roughness, roughness, 1);
+} else if (DEBUG_VIEW_VALUE == 23) {
+    // Metallic (duplicate of 4 for sweep)
+    return half4(metallic, metallic, metallic, 1);
+} else if (DEBUG_VIEW_VALUE == 24) {
+    // Normal (duplicate of 2 for sweep)
+    return half4(normal_dec * 0.5h + 0.5h, 1);
+} else if (DEBUG_VIEW_VALUE == 25) {
+    // Raw (pre-decode) normal visualization
+    return half4(normal_raw * 0.5h + 0.5h, 1);
+}
+
+// NOTE: case 26 (“difference heatmap”) was omitted here because its body
+// wasn't present in your snippet. Add it later if needed.
+
+// If we get here, proceed with your regular PBR/SH shading…
         half3 diff = abs(normal_dec - normal_raw);
         return half4(diff, 1);
     } else if (DEBUG_VIEW_VALUE == 27) {
@@ -232,9 +305,12 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
         half3 shaded = shadeGaussian(albedo,
                                      metallic,
                                      roughness,
-                                     normal_dec,
-                                     viewDir,
+                                     shadingNormal,
+                                     shadingView,
+                                     shadingReflection,
                                      half(1.0),   // force AO = 1
+                                     diffuseSH,
+                                     specularSH,
                                      environmentMap,
                                      brdfLUT,
                                      environmentSampler,
@@ -281,6 +357,38 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
         // Coverage and depth handled in postprocess
         return half4(0);
     }
+// UI-driven debug modes (function constant)
+// 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
+
+if (DEBUG_VIEW_VALUE == 28) {
+    // Diffuse spherical harmonics contribution only (accumulated)
+    half3 sh = half3(diffuseSH) * accumulatedAlpha;
+    return half4(sh, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 29) {
+    // Specular spherical harmonics contribution only (accumulated)
+    half3 sh = half3(specularSH) * accumulatedAlpha;
+    return half4(sh, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 7) {
+    // Shaded result (uses environment)
+    half3 shaded = shadeGaussian(
+        albedo,
+        metallic,
+        roughness,
+        shadingNormal,
+        shadingView,
+        shadingReflection,
+        ao,
+        diffuseSH,
+        specularSH,
+        environmentMap,
+        brdfLUT,
+        environmentSampler,
+        brdfSampler
+    );
+    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+} else {
+    // Coverage and depth handled in postprocess
+    return half4(0);
 }
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
