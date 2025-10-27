@@ -152,6 +152,7 @@ public struct SplatScenePoint {
     }
 
     public enum AlbedoInput {
+        case girRawLinearFloat(SIMD3<Float>)
         case linearFloat(SIMD3<Float>)
         case linearFloat256(SIMD3<Float>)
         case linearUInt8(SIMD3<UInt8>)
@@ -207,6 +208,9 @@ public struct SplatScenePoint {
 
     public mutating func setAlbedo(_ input: AlbedoInput) {
         switch input {
+        case .girRawLinearFloat(let values):
+            let converted = values + SIMD3<Float>(repeating: 0.5)
+            albedo = converted.clamped01()
         case .linearFloat(let values):
             albedo = values.clamped01()
         case .linearFloat256(let values):
