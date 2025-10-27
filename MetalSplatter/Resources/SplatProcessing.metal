@@ -42,8 +42,10 @@ float3 sampleDiffuseIrradiance(texturecube<half> environmentMap,
     return float3(environmentMap.sample(environmentSampler, normal, level(float(diffuseMip))).rgb);
 }
 
-float3 evaluateSplatSHCoefficients(SplatSHCoefficients coefficients, float3 direction) {
-    ushort count = coefficients.count;
+float3 evaluateSplatSHCoefficients(SplatSHCoefficients coefficients,
+                                   ushort coefficientCount,
+                                   float3 direction) {
+    ushort count = min(coefficients.count, coefficientCount);
     if (count == 0) {
         return float3(0);
     }
@@ -148,12 +150,20 @@ float3 evaluateSplatSHCoefficients(SplatSHCoefficients coefficients, float3 dire
     return result;
 }
 
-float3 evaluateSplatSHForDiffuse(SplatSHCoefficients coefficients, float3 normal) {
-    return (coefficients.count == 0) ? float3(0) : evaluateSplatSHCoefficients(coefficients, normal);
+float3 evaluateSplatSHForDiffuse(SplatSHCoefficients coefficients,
+                                 ushort coefficientCount,
+                                 float3 normal) {
+    return (coefficients.count == 0 || coefficientCount == 0)
+        ? float3(0)
+        : evaluateSplatSHCoefficients(coefficients, coefficientCount, normal);
 }
 
-float3 evaluateSplatSHForSpecular(SplatSHCoefficients coefficients, float3 reflectionDirection) {
-    return (coefficients.count == 0) ? float3(0) : evaluateSplatSHCoefficients(coefficients, reflectionDirection);
+float3 evaluateSplatSHForSpecular(SplatSHCoefficients coefficients,
+                                  ushort coefficientCount,
+                                  float3 reflectionDirection) {
+    return (coefficients.count == 0 || coefficientCount == 0)
+        ? float3(0)
+        : evaluateSplatSHCoefficients(coefficients, coefficientCount, reflectionDirection);
 }
 
 half3 shadeGaussian(half3 albedo,

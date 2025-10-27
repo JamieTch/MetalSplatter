@@ -3,6 +3,7 @@
 
 // Debug visualization selector:
 // 0: coverage (alpha), 1: albedo, 2: normal, 3: roughness, 4: metallic, 5: AO, 6: depth, 7: shaded (default)
+// 28: diffuse SH only, 29: specular SH only
 #ifndef DEBUG_VIEW
 #define DEBUG_VIEW 1
 #endif
@@ -86,8 +87,10 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
 }
 
 fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
+                                                     ushort viewIndex [[render_target_array_index]],
                                                      FragmentValues previousFragmentValues [[imageblock_data]],
-                                                     constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]]) {
+                                                     constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
+                                                     constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     FragmentStore out;
 
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a); // restored: use real coverage
@@ -99,13 +102,23 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
     half oneMinusAlpha = 1 - alpha;
     half ao = computeAmbientOcclusion(in.color.a);
 
+    Uniforms uniforms = uniformsArray.uniforms[min(int(viewIndex), kMaxViewCount)];
+    ushort configuredCoefficientCount = ushort(min(uniforms.shCoefficientCount, 16u));
     SplatSHCoefficients shCoefficients = splatSHArray[in.splatIndex];
     float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
     float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
     float3 reflectionDirection = reflect(-viewDirection, normal);
 
-    float3 diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, normal);
-    float3 specularSH = evaluateSplatSHForSpecular(shCoefficients, reflectionDirection);
+    float3 diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, configuredCoefficientCount, normal);
+    float3 specularSH = evaluateSplatSHForSpecular(shCoefficients, configuredCoefficientCount, reflectionDirection);
+
+    uint shMask = uniforms.useSHMask;
+    if ((shMask & SphericalHarmonicsUsageDiffuse) == 0) {
+        diffuseSH = float3(0);
+    }
+    if ((shMask & SphericalHarmonicsUsageSpecular) == 0) {
+        specularSH = float3(0);
+    }
 
     half4 albedoMetallic = half4(in.albedo * alpha, in.metallic * alpha);
     half4 normalRoughness = half4(half3(normal) * alpha, in.roughness * alpha);
@@ -308,6 +321,18 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     {
         half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
         return half4(l.x, l.y, 0, 1);
+    }
+#elif DEBUG_VIEW == 28
+    // Diffuse spherical harmonics contribution only (accumulated)
+    {
+        half3 sh = half3(diffuseSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
+    }
+#elif DEBUG_VIEW == 29
+    // Specular spherical harmonics contribution only (accumulated)
+    {
+        half3 sh = half3(specularSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
     }
 #elif DEBUG_VIEW == 7
     // Shaded result (uses environment)

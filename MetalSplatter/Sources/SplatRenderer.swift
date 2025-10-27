@@ -271,7 +271,8 @@ public class SplatRenderer {
 
         var splatCount: UInt32
         var indexedSplatCount: UInt32
-        var paddingCounts: SIMD2<UInt32> = .zero
+        var shCoefficientCount: UInt32
+        var useSHMask: UInt32
     }
 
     // Keep in sync with Shaders.metal : UniformsArray
@@ -444,6 +445,14 @@ public class SplatRenderer {
     var uniformBufferIndex = 0
     var uniforms: UnsafeMutablePointer<UniformsArray>
 
+    private var configuredSphericalHarmonicsCoefficientCount: UInt32?
+    private var configuredSphericalHarmonicsUsageMask: UInt32?
+    private var derivedSphericalHarmonicsCoefficientCount: UInt32 = 0
+
+    public var gaussianImageRepresentationMetadata: GaussianImageRepresentationMetadata? {
+        didSet { updateGaussianImageRepresentationMetadata() }
+    }
+
     // cameraWorldPosition and Forward vectors are the latest mean camera position across all viewports
     var cameraWorldPosition: SIMD3<Float> = .zero
     var cameraWorldForward: SIMD3<Float> = .init(x: 0, y: 0, z: -1)
@@ -517,6 +526,8 @@ public class SplatRenderer {
         } catch {
             fatalError("Unable to initialize SplatRenderer: \(error)")
         }
+
+        updateGaussianImageRepresentationMetadata()
     }
 
     public func reset() {
@@ -524,6 +535,7 @@ public class SplatRenderer {
         try? splatBuffer.setCapacity(0)
         splatSHBuffer.count = 0
         try? splatSHBuffer.setCapacity(0)
+        derivedSphericalHarmonicsCoefficientCount = 0
     }
 
     public func setEnvironmentMap(_ texture: MTLTexture?) throws {
@@ -750,6 +762,8 @@ public class SplatRenderer {
                     .prefix(SphericalHarmonicConstants.maxCoefficientCount)
             )
             let activatedCoefficients = Self.activateSphericalHarmonics(sanitizedCoefficients)
+            derivedSphericalHarmonicsCoefficientCount = max(derivedSphericalHarmonicsCoefficientCount,
+                                                            UInt32(activatedCoefficients.count))
             splatSHBuffer.append(SplatSHCoefficients(coefficients: activatedCoefficients))
         }
     }
@@ -786,6 +800,27 @@ public class SplatRenderer {
         materialFallbackTelemetry = MaterialFallbackTelemetry()
         didLogEnvironmentFallbackThisFrame = false
         didLogBRDFFallbackThisFrame = false
+    }
+
+    private func updateGaussianImageRepresentationMetadata() {
+        configuredSphericalHarmonicsCoefficientCount = gaussianImageRepresentationMetadata?.sphericalHarmonicsCoefficientCount
+        if let usage = gaussianImageRepresentationMetadata?.sphericalHarmonicsUsage {
+            configuredSphericalHarmonicsUsageMask = usage.rawValue
+        } else {
+            configuredSphericalHarmonicsUsageMask = nil
+        }
+    }
+
+    private func effectiveSphericalHarmonicsCoefficientCount() -> UInt32 {
+        configuredSphericalHarmonicsCoefficientCount ?? derivedSphericalHarmonicsCoefficientCount
+    }
+
+    private func effectiveSphericalHarmonicsUsageMask() -> UInt32 {
+        if let configuredMask = configuredSphericalHarmonicsUsageMask {
+            return configuredMask
+        }
+        let coefficientCount = effectiveSphericalHarmonicsCoefficientCount()
+        return coefficientCount == 0 ? 0 : GaussianImageRepresentationSphericalHarmonicsUsage.all.rawValue
     }
 
     private func switchToNextDynamicBuffer() {
@@ -911,6 +946,8 @@ public class SplatRenderer {
     private func updateUniforms(forViewports viewports: [ViewportDescriptor],
                                 splatCount: UInt32,
                                 indexedSplatCount: UInt32) {
+        let shCoefficientCount = effectiveSphericalHarmonicsCoefficientCount()
+        let shMask = effectiveSphericalHarmonicsUsageMask()
         for (i, viewport) in viewports.enumerated() where i <= maxViewCount {
             let cameraPosition = Self.cameraWorldPosition(forViewMatrix: viewport.viewMatrix)
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
@@ -918,7 +955,9 @@ public class SplatRenderer {
                                     screenSize: SIMD2(x: UInt32(viewport.screenSize.x), y: UInt32(viewport.screenSize.y)),
                                     cameraPosition: SIMD4<Float>(cameraPosition, 1),
                                     splatCount: splatCount,
-                                    indexedSplatCount: indexedSplatCount)
+                                    indexedSplatCount: indexedSplatCount,
+                                    shCoefficientCount: shCoefficientCount,
+                                    useSHMask: shMask)
             self.uniforms.pointee.setUniforms(index: i, uniforms)
         }
 
@@ -1068,6 +1107,7 @@ public class SplatRenderer {
         renderEncoder.setVertexBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setVertexBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
         renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+        renderEncoder.setFragmentBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
 
         renderEncoder.drawIndexedPrimitives(type: .triangle,
@@ -1089,6 +1129,7 @@ public class SplatRenderer {
             renderEncoder.setCullMode(.none)
             Self.log.debug("Postprocess: binding material resources before draw")
             bindMaterialResources(to: renderEncoder)
+            renderEncoder.setFragmentBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
             renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
             renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)

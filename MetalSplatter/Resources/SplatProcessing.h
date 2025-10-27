@@ -18,6 +18,13 @@ half splatFragmentAlpha(half2 relativePosition, half splatAlpha);
 
 half computeAmbientOcclusion(half opacity);
 
+float3 evaluateSplatSHForDiffuse(SplatSHCoefficients coefficients,
+                                 ushort coefficientCount,
+                                 float3 normal);
+float3 evaluateSplatSHForSpecular(SplatSHCoefficients coefficients,
+                                  ushort coefficientCount,
+                                  float3 reflectionDirection);
+
 half3 shadeGaussian(half3 albedo,
                     half metallic,
                     half roughness,

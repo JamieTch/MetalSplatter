@@ -26,6 +26,12 @@ enum SamplerIndex: int32_t
     SamplerIndexBRDF        = 1,
 };
 
+enum SphericalHarmonicsUsageMask : uint
+{
+    SphericalHarmonicsUsageDiffuse  = 1u << 0,
+    SphericalHarmonicsUsageSpecular = 1u << 1,
+};
+
 typedef struct
 {
     matrix_float4x4 projectionMatrix;
@@ -41,7 +47,8 @@ typedef struct
      */
     uint splatCount;
     uint indexedSplatCount;
-    uint2 _paddingCounts;
+    uint shCoefficientCount;
+    uint useSHMask;
 } Uniforms;
 
 typedef struct
