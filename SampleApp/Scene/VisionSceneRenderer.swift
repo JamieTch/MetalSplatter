@@ -53,12 +53,48 @@ class VisionSceneRenderer {
 
     let inFlightSemaphore = DispatchSemaphore(value: Constants.maxSimultaneousRenders)
 
-    var lastRotationUpdateTimestamp: Date? = nil
-    var rotation: Angle = .zero
+    private struct CachedHandState {
+        let chirality: HandAnchor.Chirality
+        let pinchPosition: SIMD3<Float>?
+        let palmPosition: SIMD3<Float>?
+        let isPinching: Bool
+    }
+
+    private struct ModelInteractionState {
+        enum GestureMode {
+            case idle
+            case singleHandGrab(chirality: HandAnchor.Chirality)
+            case twoHandManipulate
+        }
+
+        var translation = SIMD3<Float>(0, 0, Constants.modelCenterZ)
+        var rotation = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+        var scale: Float = 1.0
+        var gestureMode: GestureMode = .idle
+
+        var singleHandOffset: SIMD3<Float>?
+        var twoHandInitialDistance: Float?
+        var twoHandInitialVector: SIMD3<Float>?
+        var twoHandInitialRotation: simd_quatf?
+        var twoHandInitialScale: Float = 1.0
+        var twoHandMidpointOffset: SIMD3<Float>?
+    }
+
+    private enum InteractionConstants {
+        static let pinchThreshold: Float = 0.03
+    }
+
+    private var lastRotationUpdateTimestamp: Date? = nil
+    private var interactionState = ModelInteractionState()
 
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
     let environmentLightEstimation: EnvironmentLightEstimationProvider
+    let handTracking: HandTrackingProvider
+
+    private let handStateLock = NSLock()
+    private var cachedHandStates: [HandAnchor.Chirality: CachedHandState] = [:]
+    private var handUpdateTask: Task<Void, Never>?
 
     private let environmentProbeManager: EnvironmentProbeManager
     private let environmentPrefilter: EnvironmentPrefilter?
@@ -85,6 +121,7 @@ class VisionSceneRenderer {
 
         worldTracking = WorldTrackingProvider()
         environmentLightEstimation = EnvironmentLightEstimationProvider()
+        handTracking = HandTrackingProvider()
         arSession = ARKitSession()
         environmentProbeManager = EnvironmentProbeManager(session: arSession,
                                                           worldTracking: worldTracking,
@@ -96,11 +133,27 @@ class VisionSceneRenderer {
             Self.log.error("Failed to initialize environment prefilter: \(error.localizedDescription)")
             environmentPrefilter = nil
         }
+
+        handUpdateTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            for await update in self.handTracking.anchorUpdates {
+                switch update.event {
+                case .added, .updated:
+                    self.cacheHandAnchors([update.anchor])
+                case .removed:
+                    self.removeCachedHandState(for: update.anchor.chirality)
+                @unknown default:
+                    break
+                }
+            }
+        }
     }
 
     func load(_ model: ModelIdentifier?) async throws {
         guard model != self.model else { return }
         self.model = model
+
+        interactionState = ModelInteractionState()
 
         if let splat = modelRenderer as? SplatRenderer {
             try? splat.setEnvironmentMap(nil)
@@ -136,7 +189,7 @@ class VisionSceneRenderer {
     func startRenderLoop() {
         Task {
             do {
-                try await arSession.run([worldTracking, environmentLightEstimation])
+                try await arSession.run([worldTracking, environmentLightEstimation, handTracking])
             } catch {
                 fatalError("Failed to initialize ARSession")
             }
@@ -150,9 +203,11 @@ class VisionSceneRenderer {
     }
 
     private func viewports(drawable: LayerRenderer.Drawable, deviceAnchor: DeviceAnchor?) -> [ModelRendererViewportDescriptor] {
-        let rotationMatrix = matrix4x4_rotation(radians: Float(rotation.radians),
-                                                axis: Constants.rotationAxis)
-        let translationMatrix = matrix4x4_translation(0.0, 0.0, Constants.modelCenterZ)
+        let translationMatrix = matrix4x4_translation(interactionState.translation.x,
+                                                     interactionState.translation.y,
+                                                     interactionState.translation.z)
+        let rotationMatrix = matrix_float4x4(interactionState.rotation)
+        let scaleMatrix = matrix4x4_scale(interactionState.scale)
         // Turn common 3D GS PLY files rightside-up. This isn't generally meaningful, it just
         // happens to be a useful default for the most common datasets at the moment.
         let commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(0, 0, 1))
@@ -191,7 +246,7 @@ class VisionSceneRenderer {
             }
             return ModelRendererViewportDescriptor(viewport: view.textureMap.viewport,
                                                    projectionMatrix: projMatrixSIMD,
-                                                   viewMatrix: userViewpointMatrix * translationMatrix * rotationMatrix * commonUpCalibration,
+                                                   viewMatrix: userViewpointMatrix * translationMatrix * rotationMatrix * scaleMatrix * commonUpCalibration,
                                                    screenSize: screenSize)
         }
     }
@@ -309,14 +364,159 @@ class VisionSceneRenderer {
         return true
     }
 
-    private func updateRotation() {
+    private func updateInteractionState() {
         let now = Date()
-        defer {
-            lastRotationUpdateTimestamp = now
+        defer { lastRotationUpdateTimestamp = now }
+
+        handStateLock.lock()
+        let handStates = cachedHandStates
+        handStateLock.unlock()
+
+        let pinchedHands = handStates.filter { $0.value.isPinching }
+
+        switch interactionState.gestureMode {
+        case .idle:
+            if pinchedHands.count == 1, let entry = pinchedHands.first?.value, let pinchPosition = entry.pinchPosition {
+                interactionState.gestureMode = .singleHandGrab(chirality: entry.chirality)
+                interactionState.singleHandOffset = interactionState.translation - pinchPosition
+            } else if pinchedHands.count >= 2 {
+                beginTwoHandGesture(with: handStates)
+            }
+        case .singleHandGrab(let chirality):
+            let otherPinchedCount = pinchedHands.count
+            if otherPinchedCount >= 2 {
+                beginTwoHandGesture(with: handStates)
+                return
+            }
+
+            guard
+                let hand = handStates[chirality],
+                hand.isPinching,
+                let pinchPosition = hand.pinchPosition,
+                let offset = interactionState.singleHandOffset
+            else {
+                resetToIdle()
+                return
+            }
+
+            interactionState.translation = pinchPosition + offset
+        case .twoHandManipulate:
+            guard
+                let left = handStates[.left], left.isPinching,
+                let right = handStates[.right], right.isPinching,
+                let leftPalm = left.palmPosition ?? left.pinchPosition,
+                let rightPalm = right.palmPosition ?? right.pinchPosition,
+                let midpointOffset = interactionState.twoHandMidpointOffset,
+                let initialVector = interactionState.twoHandInitialVector,
+                let initialRotation = interactionState.twoHandInitialRotation,
+                let initialDistance = interactionState.twoHandInitialDistance,
+                initialDistance > 0
+            else {
+                resetToIdle()
+                return
+            }
+
+            let midpoint = (leftPalm + rightPalm) * 0.5
+            interactionState.translation = midpoint + midpointOffset
+
+            let currentVector = rightPalm - leftPalm
+            let currentDistance = simd_length(currentVector)
+            if currentDistance > 0 {
+                interactionState.scale = interactionState.twoHandInitialScale * (currentDistance / initialDistance)
+                let rotationDelta = simd_quatf(from: simd_normalize(initialVector), to: simd_normalize(currentVector))
+                interactionState.rotation = rotationDelta * initialRotation
+            }
+
+            if pinchedHands.count < 2 {
+                resetToIdle()
+            }
+        }
+    }
+
+    private func beginTwoHandGesture(with handStates: [HandAnchor.Chirality: CachedHandState]) {
+        guard
+            let left = handStates[.left], left.isPinching,
+            let right = handStates[.right], right.isPinching,
+            let leftPalm = left.palmPosition ?? left.pinchPosition,
+            let rightPalm = right.palmPosition ?? right.pinchPosition
+        else {
+            resetToIdle()
+            return
         }
 
-        guard let lastRotationUpdateTimestamp else { return }
-        rotation += Constants.rotationPerSecond * now.timeIntervalSince(lastRotationUpdateTimestamp)
+        let midpoint = (leftPalm + rightPalm) * 0.5
+        interactionState.twoHandMidpointOffset = interactionState.translation - midpoint
+        interactionState.twoHandInitialDistance = simd_length(rightPalm - leftPalm)
+        interactionState.twoHandInitialVector = rightPalm - leftPalm
+        interactionState.twoHandInitialRotation = interactionState.rotation
+        interactionState.twoHandInitialScale = interactionState.scale
+        interactionState.gestureMode = .twoHandManipulate
+        interactionState.singleHandOffset = nil
+    }
+
+    private func resetToIdle() {
+        interactionState.gestureMode = .idle
+        interactionState.singleHandOffset = nil
+        interactionState.twoHandInitialDistance = nil
+        interactionState.twoHandInitialVector = nil
+        interactionState.twoHandInitialRotation = nil
+        interactionState.twoHandMidpointOffset = nil
+        interactionState.twoHandInitialScale = interactionState.scale
+    }
+
+    private func cacheHandAnchors<S: Sequence>(_ anchors: S) where S.Element == HandAnchor {
+        var updates: [HandAnchor.Chirality: CachedHandState] = [:]
+
+        for anchor in anchors {
+            let anchorTransform = anchor.originFromAnchorTransform
+            let skeleton = anchor.handSkeleton
+
+            let thumbPosition = jointPosition(.thumbTip, skeleton: skeleton, anchorTransform: anchorTransform)
+            let indexPosition = jointPosition(.indexFingerTip, skeleton: skeleton, anchorTransform: anchorTransform)
+            let palmPosition = jointPosition(.wrist, skeleton: skeleton, anchorTransform: anchorTransform)
+
+            let isPinching: Bool
+            let pinchPosition: SIMD3<Float>?
+            if let thumbPosition, let indexPosition {
+                let distance = simd_distance(thumbPosition, indexPosition)
+                isPinching = distance < InteractionConstants.pinchThreshold
+                pinchPosition = (thumbPosition + indexPosition) * 0.5
+            } else {
+                isPinching = false
+                pinchPosition = nil
+            }
+
+            let cachedState = CachedHandState(chirality: anchor.chirality,
+                                              pinchPosition: pinchPosition,
+                                              palmPosition: palmPosition ?? pinchPosition,
+                                              isPinching: isPinching)
+            updates[anchor.chirality] = cachedState
+        }
+
+        handStateLock.lock()
+        for (chirality, state) in updates {
+            cachedHandStates[chirality] = state
+        }
+        handStateLock.unlock()
+    }
+
+    private func removeCachedHandState(for chirality: HandAnchor.Chirality) {
+        handStateLock.lock()
+        cachedHandStates.removeValue(forKey: chirality)
+        handStateLock.unlock()
+    }
+
+    private func jointPosition(_ name: HandSkeleton.JointName,
+                               skeleton: HandSkeleton?,
+                               anchorTransform: simd_float4x4) -> SIMD3<Float>? {
+        guard
+            let joint = skeleton?.joint(name)
+        else { return nil }
+
+        let jointWorld = anchorTransform * joint.anchorFromJointTransform
+        return SIMD3<Float>(jointWorld.columns.3.x,
+                            jointWorld.columns.3.y,
+                            jointWorld.columns.3.z)
     }
 
     func renderFrame() {
@@ -370,7 +570,7 @@ class VisionSceneRenderer {
             semaphore.signal()
         }
 
-        updateRotation()
+        updateInteractionState()
         updateEnvironmentProbeIfNeeded()
         applyEnvironmentResourcesIfNeeded()
 
@@ -592,6 +792,7 @@ class VisionSceneRenderer {
 
     deinit {
         environmentProbeManager.stop()
+        handUpdateTask?.cancel()
     }
 }
 
