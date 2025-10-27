@@ -2,6 +2,8 @@ import SwiftUI
 import RealityKit
 
 struct ContentView: View {
+    @State private var isPickingFile = false
+    @EnvironmentObject private var rendererSettings: RendererSettings
     @State private var missingModelAlert: PreloadedGaussianModel?
 
 #if os(macOS)
@@ -41,6 +43,7 @@ struct ContentView: View {
                 .navigationDestination(for: ModelIdentifier.self) { modelIdentifier in
                     MetalKitSceneView(modelIdentifier: modelIdentifier)
                         .navigationTitle(modelIdentifier.description)
+                        .environmentObject(rendererSettings)
                 }
         }
 #endif // os(iOS)
@@ -55,6 +58,26 @@ struct ContentView: View {
 
             Spacer()
 
+            // Debug view selector
+            Picker("Debug View", selection: $rendererSettings.debugViewMode) {
+                ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            // Read a scene file from disk
+            Button("Read Scene File") {
+                isPickingFile = true
+            }
+            .padding()
+            .buttonStyle(.borderedProminent)
+            .disabled(isPickingFile)
+
+            Divider().padding(.vertical, 4)
+
+            // Preloaded models from bundle
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(PreloadedGaussianModel.allCases) { model in
                     Button(model.displayName) {

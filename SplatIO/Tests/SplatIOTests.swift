@@ -195,13 +195,57 @@ final class SplatIOTests: XCTestCase {
         property float rot_1
         property float rot_2
         property float rot_3
+        property float base_color_r
+        property float base_color_g
+        property float base_color_b
+        property float metallic
+        property float roughness
+        end_header
+        0 0 0 0 0 1 0 0 0 0 1 1 1 1 0 0 0 0.25 0.5 0.75 0.2 0.8
+        """
+
+        let points = try readPoints(fromASCII: ascii)
+        XCTAssertEqual(points.count, 1)
+        let point = try XCTUnwrap(points.first)
+        XCTAssertEqual(point.albedo.x, 0.25, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.y, 0.5, accuracy: 1e-5)
+        XCTAssertEqual(point.albedo.z, 0.75, accuracy: 1e-5)
+        XCTAssertEqual(point.metallic, 0.2, accuracy: 1e-5)
+        XCTAssertEqual(point.roughness, 0.8, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.x, 0.0, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.y, 0.0, accuracy: 1e-5)
+        XCTAssertEqual(point.normal.z, 1.0, accuracy: 1e-5)
+    }
+
+    func testPLYMaterialFloat32GIRRaw() throws {
+        let ascii = """
+        ply
+        format ascii 1.0
+        element vertex 1
+        property float x
+        property float y
+        property float z
+        property float nx
+        property float ny
+        property float nz
+        property float f_dc_0
+        property float f_dc_1
+        property float f_dc_2
+        property float opacity
+        property float scale_0
+        property float scale_1
+        property float scale_2
+        property float rot_0
+        property float rot_1
+        property float rot_2
+        property float rot_3
         property float albedo_r
         property float albedo_g
         property float albedo_b
         property float metallic
         property float roughness
         end_header
-        0 0 0 0 0 1 0 0 0 0 1 1 1 1 0 0 0 0.25 0.5 0.75 0.2 0.8
+        0 0 0 0 0 1 0 0 0 0 1 1 1 1 0 0 0 -0.25 0 0.25 0.2 0.8
         """
 
         let points = try readPoints(fromASCII: ascii)
@@ -239,9 +283,9 @@ final class SplatIOTests: XCTestCase {
         property float rot_1
         property float rot_2
         property float rot_3
-        property float albedo_r
-        property float albedo_g
-        property float albedo_b
+        property float base_color_r
+        property float base_color_g
+        property float base_color_b
         property float metallic
         property float roughness
         end_header

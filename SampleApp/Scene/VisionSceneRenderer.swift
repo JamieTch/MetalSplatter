@@ -1,6 +1,7 @@
 #if os(visionOS)
 
 import ARKit
+import Combine
 import CompositorServices
 import Foundation
 import Metal
@@ -113,6 +114,10 @@ class VisionSceneRenderer {
     private var didAutoCapture: Bool = false
     private var captureNextFrame: Bool = false
     private var lastBrightnessProbeFrame: UInt64 = 0
+    private var rendererSettingsCancellable: AnyCancellable?
+    private var debugViewModeStorage: SplatRenderer.DebugViewMode = .albedo
+    private let debugViewModeLock = NSLock()
+    private var debugViewModeNeedsApply = false
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -169,6 +174,7 @@ class VisionSceneRenderer {
                                           maxViewCount: layerRenderer.properties.viewCount,
                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await splat.read(from: url)
+            splat.debugViewMode = debugViewMode
             modelRenderer = splat
             if environmentPrefilterResult != nil {
                 environmentResourcesDirty = true
@@ -616,10 +622,51 @@ class VisionSceneRenderer {
                 continue
             } else {
                 autoreleasepool {
+                    self.applyDebugViewModeIfNeeded()
                     self.renderFrame()
                 }
             }
         }
+    }
+
+    func bindRendererSettings(_ settings: RendererSettings) {
+        debugViewMode = settings.debugViewMode
+        rendererSettingsCancellable = settings.$debugViewMode
+            .sink { [weak self] mode in
+                self?.debugViewMode = mode
+            }
+    }
+
+    private var debugViewMode: SplatRenderer.DebugViewMode {
+        get {
+            debugViewModeLock.lock()
+            defer { debugViewModeLock.unlock() }
+            return debugViewModeStorage
+        }
+        set {
+            debugViewModeLock.lock()
+            let didChange = debugViewModeStorage != newValue
+            debugViewModeStorage = newValue
+            if didChange {
+                debugViewModeNeedsApply = true
+            }
+            debugViewModeLock.unlock()
+        }
+    }
+
+    private func applyDebugViewModeIfNeeded() {
+        let mode: SplatRenderer.DebugViewMode?
+        debugViewModeLock.lock()
+        if debugViewModeNeedsApply {
+            debugViewModeNeedsApply = false
+            mode = debugViewModeStorage
+        } else {
+            mode = nil
+        }
+        debugViewModeLock.unlock()
+
+        guard let mode, let splat = modelRenderer as? SplatRenderer else { return }
+        splat.debugViewMode = mode
     }
 
     private func updateEnvironmentProbeIfNeeded() {

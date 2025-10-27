@@ -26,9 +26,10 @@
 		61791E022B415D3F00302B57 /* SampleBoxRenderer in Frameworks */ = {isa = PBXBuildFile; productRef = 61791E012B415D3F00302B57 /* SampleBoxRenderer */; };
 		61791E102B41688000302B57 /* MetalKitSceneRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */; };
 		61791E132B416DD700302B57 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E112B416DCF00302B57 /* Constants.swift */; };
-                61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
-                617E50C92B314C4800F99766 /* PLYIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50C82B314C4800F99766 /* PLYIO */; };
+		61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
+		617E50C92B314C4800F99766 /* PLYIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50C82B314C4800F99766 /* PLYIO */; };
                 617E50CB2B314C4800F99766 /* SplatIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50CA2B314C4800F99766 /* SplatIO */; };
+                61F2B3A12F5C123400A1A1A1 /* RendererSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F2B3A02F5C123400A1A1A1 /* RendererSettings.swift */; };
                 61B9F0A12BC4D50000AA0001 /* PreloadedGaussianModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */; };
                 61B9F0A32BC4D50000AA0001 /* GaussianSplats in Resources */ = {isa = PBXBuildFile; fileRef = 61B9F0A22BC4D50000AA0001 /* GaussianSplats */; };
 /* End PBXBuildFile section */
@@ -53,6 +54,7 @@
                 61A1AA002B7C000100A1AA00 /* EnvironmentProbeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentProbeManager.swift; sourceTree = "<group>"; };
                 61A1AA042B7C000100A1AA00 /* EnvironmentPrefilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPrefilter.swift; sourceTree = "<group>"; };
                 61A1AA082B7C000100A1AA00 /* EnvironmentPrefilter.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = EnvironmentPrefilter.metal; sourceTree = "<group>"; };
+                61F2B3A02F5C123400A1A1A1 /* RendererSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererSettings.swift; sourceTree = "<group>"; };
                 617E50B02B314BE200F99766 /* MetalSplatter SampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MetalSplatter SampleApp.app"; sourceTree = BUILT_PRODUCTS_DIR; };
                 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreloadedGaussianModel.swift; sourceTree = "<group>"; };
                 61B9F0A22BC4D50000AA0001 /* GaussianSplats */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GaussianSplats; path = GaussianSplats; sourceTree = "<group>"; };
@@ -106,6 +108,7 @@
                                 61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */,
                                 61791E142B42294700302B57 /* MetalKitSceneView.swift */,
                                 61791E0C2B41683500302B57 /* VisionSceneRenderer.swift */,
+                                61F2B3A02F5C123400A1A1A1 /* RendererSettings.swift */,
                         );
                         path = Scene;
                         sourceTree = "<group>";
@@ -257,12 +260,13 @@
                                 61791DE02B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift in Sources */,
                                 147AFBD02E33ED730052B2AD /* CameraController.swift in Sources */,
                                 147AFBD12E33ED730052B2AD /* InteractiveMTKView.swift in Sources */,
-				61791DE82B4154FB00302B57 /* ModelRenderer.swift in Sources */,
-				61791DCF2B41544300302B57 /* Assets.xcassets in Sources */,
-				61791E132B416DD700302B57 /* Constants.swift in Sources */,
-				61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */,
-				610347DC2B46875A00693CE3 /* ContentStageConfiguration.swift in Sources */,
-			);
+                                61791DE82B4154FB00302B57 /* ModelRenderer.swift in Sources */,
+                                61791DCF2B41544300302B57 /* Assets.xcassets in Sources */,
+                                61791E132B416DD700302B57 /* Constants.swift in Sources */,
+                                61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */,
+                                610347DC2B46875A00693CE3 /* ContentStageConfiguration.swift in Sources */,
+                                61F2B3A12F5C123400A1A1A1 /* RendererSettings.swift in Sources */,
+                        );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
