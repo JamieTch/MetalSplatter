@@ -41,15 +41,24 @@ fragment half4 singleStageSplatFragmentShader(FragmentIn in [[stage_in]],
         return half4(0);
     }
 
-    (void)splatSHArray;
+    SplatSHCoefficients shCoefficients = splatSHArray[in.splatIndex];
+    float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
+    float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
+    float3 reflectionDirection = reflect(-viewDirection, normal);
+
+    float3 diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, normal);
+    float3 specularSH = evaluateSplatSHForSpecular(shCoefficients, reflectionDirection);
 
     half ao = computeAmbientOcclusion(in.color.a);
     half3 shaded = shadeGaussian(in.albedo,
                                  in.metallic,
                                  in.roughness,
-                                 in.normal,
-                                 half3(in.viewDirection),
+                                 normal,
+                                 viewDirection,
+                                 reflectionDirection,
                                  ao,
+                                 diffuseSH,
+                                 specularSH,
                                  environmentMap,
                                  brdfLUT,
                                  environmentSampler,

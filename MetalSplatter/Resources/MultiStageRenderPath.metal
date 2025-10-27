@@ -27,6 +27,8 @@ typedef struct
     half4 normalRoughness [[raster_order_group(0)]];
     half4 viewAlpha [[raster_order_group(0)]];
     half2 ambientOcclusion [[raster_order_group(0)]];
+    half4 diffuseIrradiance [[raster_order_group(0)]];
+    half4 specularRadiance [[raster_order_group(0)]];
     float depth [[raster_order_group(0)]];
 } FragmentValues;
 
@@ -48,6 +50,8 @@ kernel void initializeFragmentStore(imageblock<FragmentValues, imageblock_layout
     values->normalRoughness = half4(0);
     values->viewAlpha = half4(0);
     values->ambientOcclusion = half2(0);
+    values->diffuseIrradiance = half4(0);
+    values->specularRadiance = half4(0);
     values->depth = 0;
 }
 
@@ -92,20 +96,30 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
         return out;
     }
 
-    (void)splatSHArray;
-
     half oneMinusAlpha = 1 - alpha;
     half ao = computeAmbientOcclusion(in.color.a);
 
+    SplatSHCoefficients shCoefficients = splatSHArray[in.splatIndex];
+    float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
+    float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
+    float3 reflectionDirection = reflect(-viewDirection, normal);
+
+    float3 diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, normal);
+    float3 specularSH = evaluateSplatSHForSpecular(shCoefficients, reflectionDirection);
+
     half4 albedoMetallic = half4(in.albedo * alpha, in.metallic * alpha);
-    half4 normalRoughness = half4(in.normal * alpha, in.roughness * alpha);
-    half4 viewAlpha = half4(half3(in.viewDirection) * alpha, alpha);
+    half4 normalRoughness = half4(half3(normal) * alpha, in.roughness * alpha);
+    half4 viewAlpha = half4(half3(viewDirection) * alpha, alpha);
     half2 ambientOcclusion = half2(ao * alpha, 0);
+    half4 diffuseIrradiance = half4(half3(diffuseSH) * alpha, half(0));
+    half4 specularRadiance = half4(half3(specularSH) * alpha, half(0));
 
     out.values.albedoMetallic = previousFragmentValues.albedoMetallic * oneMinusAlpha + albedoMetallic;
     out.values.normalRoughness = previousFragmentValues.normalRoughness * oneMinusAlpha + normalRoughness;
     out.values.viewAlpha = previousFragmentValues.viewAlpha * oneMinusAlpha + viewAlpha;
     out.values.ambientOcclusion = previousFragmentValues.ambientOcclusion * oneMinusAlpha + ambientOcclusion;
+    out.values.diffuseIrradiance = previousFragmentValues.diffuseIrradiance * oneMinusAlpha + diffuseIrradiance;
+    out.values.specularRadiance = previousFragmentValues.specularRadiance * oneMinusAlpha + specularRadiance;
 
     float depth = in.position.z;
     out.values.depth = previousFragmentValues.depth * oneMinusAlpha + depth * alpha;
@@ -178,12 +192,15 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     }
 
     half invAlpha = half(1.0) / accumulatedAlpha;
+    float invAlphaF = float(invAlpha);
     half3 albedo     = half3(fragmentValues.albedoMetallic.xyz * invAlpha);
     half  metallic   =        fragmentValues.albedoMetallic.w   * invAlpha;
     half3 normal     = half3(fragmentValues.normalRoughness.xyz * invAlpha);
     half  roughness  =        fragmentValues.normalRoughness.w   * invAlpha;
     half3 viewDir    = half3(fragmentValues.viewAlpha.xyz        * invAlpha);
     half  ao         =        fragmentValues.ambientOcclusion.x  * invAlpha;
+    float3 diffuseSH = float3(fragmentValues.diffuseIrradiance.xyz) * invAlphaF;
+    float3 specularSH = float3(fragmentValues.specularRadiance.xyz) * invAlphaF;
 
     // Clamp and normalize core material inputs for stability during debugging
     albedo    = clamp(albedo,   0.0h, 1.0h);
@@ -193,6 +210,10 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     // Compute raw-as-is and decoded normals
     half3 normal_raw = normalize(normal);
     half3 normal_dec = decodeNormal(normal);
+
+    float3 shadingNormal = safeNormalize(float3(normal_dec), float3(0, 0, 1));
+    float3 shadingView = safeNormalize(float3(viewDir), float3(0, 0, 1));
+    float3 shadingReflection = reflect(-shadingView, shadingNormal);
 
 #if DEBUG_VIEW == 1
     // Albedo
@@ -244,9 +265,12 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
         half3 shaded = shadeGaussian(albedo,
                                      metallic,
                                      roughness,
-                                     normal_dec,
-                                     viewDir,
+                                     shadingNormal,
+                                     shadingView,
+                                     shadingReflection,
                                      half(1.0),   // force AO = 1
+                                     diffuseSH,
+                                     specularSH,
                                      environmentMap,
                                      brdfLUT,
                                      environmentSampler,
@@ -290,9 +314,12 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     half3 shaded = shadeGaussian(albedo,
                                  metallic,
                                  roughness,
-                                 normal_dec,
-                                 viewDir,
+                                 shadingNormal,
+                                 shadingView,
+                                 shadingReflection,
                                  ao,
+                                 diffuseSH,
+                                 specularSH,
                                  environmentMap,
                                  brdfLUT,
                                  environmentSampler,

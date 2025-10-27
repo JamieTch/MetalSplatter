@@ -42,24 +42,144 @@ float3 sampleDiffuseIrradiance(texturecube<half> environmentMap,
     return float3(environmentMap.sample(environmentSampler, normal, level(float(diffuseMip))).rgb);
 }
 
+float3 evaluateSplatSHCoefficients(SplatSHCoefficients coefficients, float3 direction) {
+    ushort count = coefficients.count;
+    if (count == 0) {
+        return float3(0);
+    }
+
+    const float shC0 = 0.28209479177387814f;
+    const float shC1 = 0.4886025119029199f;
+    const float shC2_0 = 1.0925484305920792f;
+    const float shC2_1 = 0.31539156525252005f;
+    const float shC2_2 = 0.5462742152960396f;
+    const float shC3_0 = 0.5900435899266435f;
+    const float shC3_1 = 2.890611442640554f;
+    const float shC3_2 = 0.4570457994644658f;
+    const float shC3_3 = 0.3731763325901154f;
+    const float shC3_4 = 1.445305721320277f;
+
+    float x = direction.x;
+    float y = direction.y;
+    float z = direction.z;
+    float xx = x * x;
+    float yy = y * y;
+    float zz = z * z;
+    float xy = x * y;
+    float yz = y * z;
+    float xz = x * z;
+
+    float3 result = float3(coefficients.coefficient0) * shC0;
+    if (count == 1) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient1) * (-shC1 * y);
+    if (count == 2) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient2) * (shC1 * z);
+    if (count == 3) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient3) * (-shC1 * x);
+    if (count == 4) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient4) * (shC2_0 * xy);
+    if (count == 5) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient5) * (-shC2_0 * yz);
+    if (count == 6) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient6) * (shC2_1 * (3.0f * zz - 1.0f));
+    if (count == 7) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient7) * (-shC2_0 * xz);
+    if (count == 8) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient8) * (shC2_2 * (xx - yy));
+    if (count == 9) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient9) * (-shC3_0 * y * (3.0f * xx - yy));
+    if (count == 10) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient10) * (shC3_1 * xy * z);
+    if (count == 11) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient11) * (-shC3_2 * y * (5.0f * zz - 1.0f));
+    if (count == 12) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient12) * (shC3_3 * (5.0f * zz * z - 3.0f * z));
+    if (count == 13) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient13) * (-shC3_2 * x * (5.0f * zz - 1.0f));
+    if (count == 14) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient14) * (shC3_4 * z * (xx - yy));
+    if (count == 15) {
+        return result;
+    }
+
+    result += float3(coefficients.coefficient15) * (-shC3_0 * x * (xx - 3.0f * yy));
+    return result;
+}
+
+float3 evaluateSplatSHForDiffuse(SplatSHCoefficients coefficients, float3 normal) {
+    return (coefficients.count == 0) ? float3(0) : evaluateSplatSHCoefficients(coefficients, normal);
+}
+
+float3 evaluateSplatSHForSpecular(SplatSHCoefficients coefficients, float3 reflectionDirection) {
+    return (coefficients.count == 0) ? float3(0) : evaluateSplatSHCoefficients(coefficients, reflectionDirection);
+}
+
 half3 shadeGaussian(half3 albedo,
                     half metallic,
                     half roughness,
-                    half3 normal,
-                    half3 viewDirection,
+                    float3 normal,
+                    float3 viewDirection,
+                    float3 reflectionDirection,
                     half ambientOcclusion,
+                    float3 diffuseSHIrradiance,
+                    float3 specularSHRadiance,
                     texturecube<half> environmentMap,
                     texture2d<half> brdfLUT,
                     sampler environmentSampler,
                     sampler brdfSampler) {
-    float3 N = safeNormalize(float3(normal), float3(0, 0, 1));
-    float3 V = safeNormalize(float3(viewDirection), float3(0, 0, 1));
+    float3 N = safeNormalize(normal, float3(0, 0, 1));
+    float3 V = safeNormalize(viewDirection, float3(0, 0, 1));
+    float3 R = safeNormalize(reflectionDirection, float3(0, 0, 1));
     float perceptualRoughness = clamp(float(roughness), 0.045, 1.0);
-    float3 R = reflect(-V, N);
     uint mipCount = environmentMap.get_num_mip_levels();
     float lod = perceptualRoughness * float(max(int(mipCount) - 1, 0));
     float3 prefilteredColor = float3(environmentMap.sample(environmentSampler, R, level(lod)).rgb);
     float3 irradiance = sampleDiffuseIrradiance(environmentMap, environmentSampler, N);
+
+    float3 combinedDiffuseIrradiance = irradiance + diffuseSHIrradiance;
+    float3 combinedSpecularRadiance = prefilteredColor + specularSHRadiance;
 
     float NdotV = clamp(dot(N, V), 1e-4, 1.0);
     float3 baseAlbedo = float3(albedo);
@@ -72,9 +192,9 @@ half3 shadeGaussian(half3 albedo,
     float3 kD = (float3(1.0) - kS) * (1.0 - metallicValue);
 
     float2 brdfSample = float2(brdfLUT.sample(brdfSampler, float2(NdotV, perceptualRoughness)).rg);
-    float3 specular = prefilteredColor * (F0 * brdfSample.x + brdfSample.y);
+    float3 specular = combinedSpecularRadiance * (F0 * brdfSample.x + brdfSample.y);
 
-    float3 diffuse = irradiance * baseAlbedo * kD;
+    float3 diffuse = combinedDiffuseIrradiance * baseAlbedo * kD;
     float3 color = (diffuse + specular) * float(clamp(ambientOcclusion, half(0), half(1)));
     return half3(color);
 }
