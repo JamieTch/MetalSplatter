@@ -31,6 +31,13 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
 
     var drawableSize: CGSize = .zero
 
+    var debugViewMode: SplatRenderer.DebugViewMode = .albedo {
+        didSet {
+            guard oldValue != debugViewMode else { return }
+            applyDebugViewMode()
+        }
+    }
+
     init?(_ metalKitView: MTKView, camera: CameraController? = nil) {
         self.device = metalKitView.device!
         guard let queue = self.device.makeCommandQueue() else { return nil }
@@ -61,6 +68,7 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
                                                 maxViewCount: 1,
                                                 maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await splat.read(from: url)
+            splat.debugViewMode = debugViewMode
             modelRenderer = splat
         case .sampleBox:
             modelRenderer = try! await SampleBoxRenderer(device: device,
@@ -159,6 +167,11 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         drawableSize = size
+    }
+
+    private func applyDebugViewMode() {
+        guard let splat = modelRenderer as? SplatRenderer else { return }
+        splat.debugViewMode = debugViewMode
     }
 }
 

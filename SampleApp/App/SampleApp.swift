@@ -5,15 +5,19 @@ import SwiftUI
 
 @main
 struct SampleApp: App {
+    @StateObject private var rendererSettings = RendererSettings()
+
     var body: some Scene {
         WindowGroup("MetalSplatter Sample App", id: "main") {
             ContentView()
+                .environmentObject(rendererSettings)
         }
 
 #if os(macOS)
         WindowGroup(for: ModelIdentifier.self) { modelIdentifier in
             MetalKitSceneView(modelIdentifier: modelIdentifier.wrappedValue)
                 .navigationTitle(modelIdentifier.wrappedValue?.description ?? "No Model")
+                .environmentObject(rendererSettings)
         }
 #endif // os(macOS)
 
@@ -21,6 +25,7 @@ struct SampleApp: App {
         ImmersiveSpace(for: ModelIdentifier.self) { modelIdentifier in
             CompositorLayer(configuration: ContentStageConfiguration()) { layerRenderer in
                 let renderer = VisionSceneRenderer(layerRenderer)
+                renderer.bindRendererSettings(rendererSettings)
                 Task {
                     do {
                         try await renderer.load(modelIdentifier.wrappedValue)

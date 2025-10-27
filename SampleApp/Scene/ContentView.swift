@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var isPickingFile = false
+    @EnvironmentObject private var rendererSettings: RendererSettings
 
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -42,6 +43,7 @@ struct ContentView: View {
                 .navigationDestination(for: ModelIdentifier.self) { modelIdentifier in
                     MetalKitSceneView(modelIdentifier: modelIdentifier)
                         .navigationTitle(modelIdentifier.description)
+                        .environmentObject(rendererSettings)
                 }
         }
 #endif // os(iOS)
@@ -55,6 +57,14 @@ struct ContentView: View {
             Text("MetalSplatter SampleApp")
 
             Spacer()
+
+            Picker("Debug View", selection: $rendererSettings.debugViewMode) {
+                ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
 
             Button("Read Scene File") {
                 isPickingFile = true
