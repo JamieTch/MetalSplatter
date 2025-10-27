@@ -1,8 +1,30 @@
+import Combine
 import Foundation
 import MetalSplatter
 
 final class RendererSettings: ObservableObject {
+    enum CalibrationMode {
+        case idle
+        case running
+    }
+
+    enum CalibrationCommand {
+        case start
+        case confirm
+        case cancel
+    }
+
     @Published var debugViewMode: SplatRenderer.DebugViewMode = .albedo
+    @Published var activeModel: ModelIdentifier? {
+        didSet {
+            if oldValue != activeModel {
+                calibrationMode = .idle
+            }
+        }
+    }
+    @Published var calibrationMode: CalibrationMode = .idle
+
+    let calibrationCommands = PassthroughSubject<CalibrationCommand, Never>()
     let primaryDebugModes: [SplatRenderer.DebugViewMode] = [
         .shaded,
         .albedo,
