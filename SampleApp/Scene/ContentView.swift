@@ -1,10 +1,10 @@
 import SwiftUI
 import RealityKit
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var isPickingFile = false
     @EnvironmentObject private var rendererSettings: RendererSettings
+    @State private var missingModelAlert: PreloadedGaussianModel?
 
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -58,6 +58,7 @@ struct ContentView: View {
 
             Spacer()
 
+            // Debug view selector
             Picker("Debug View", selection: $rendererSettings.debugViewMode) {
                 ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
                     Text(mode.displayName).tag(mode)
@@ -66,36 +67,37 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
+            // Read a scene file from disk
             Button("Read Scene File") {
                 isPickingFile = true
             }
             .padding()
             .buttonStyle(.borderedProminent)
             .disabled(isPickingFile)
-#if os(visionOS)
-            .disabled(immersiveSpaceIsShown)
-#endif
-            .fileImporter(isPresented: $isPickingFile,
-                          allowedContentTypes: [
-                            UTType(filenameExtension: "ply")!,
-                            UTType(filenameExtension: "splat")!,
-                          ]) {
-                isPickingFile = false
-                switch $0 {
-                case .success(let url):
-                    _ = url.startAccessingSecurityScopedResource()
-                    Task {
-                        // This is a sample app. In a real app, this should be more tightly scoped, not using a silly timer.
-                        try await Task.sleep(for: .seconds(10))
-                        url.stopAccessingSecurityScopedResource()
+
+            Divider().padding(.vertical, 4)
+
+            // Preloaded models from bundle
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(PreloadedGaussianModel.allCases) { model in
+                    Button(model.displayName) {
+                        guard let url = model.bundleURL else {
+                            missingModelAlert = model
+                            return
+                        }
+                        openWindow(value: ModelIdentifier.gaussianSplat(url))
                     }
-                    openWindow(value: ModelIdentifier.gaussianSplat(url))
-                case .failure:
-                    break
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal)
+                    .buttonStyle(.borderedProminent)
+#if os(visionOS)
+                    .disabled(immersiveSpaceIsShown)
+#endif
                 }
             }
+            .padding(.horizontal)
 
-            Spacer()
+            Spacer(minLength: 24)
 
             Button("Show Sample Box") {
                 openWindow(value: ModelIdentifier.sampleBox)
@@ -119,6 +121,13 @@ struct ContentView: View {
 
             Spacer()
 #endif // os(visionOS)
+        }
+        .alert(item: $missingModelAlert) { model in
+            Alert(
+                title: Text("Model Not Found"),
+                message: Text(model.resourceMissingMessage),
+                dismissButton: .default(Text("OK"))
+            )
         }
     }
 }
