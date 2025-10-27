@@ -77,13 +77,24 @@ vertex FragmentIn multiStageSplatVertexShader(uint vertexID [[vertex_id]],
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
         out.splatIndex = 0;
+        out.diffuseSH = float3(0);
+        out.specularSH = float3(0);
         return out;
     }
 
     Splat splat = splatArray[splatID];
 
-    (void)splatSHArray;
-    return splatVertex(splat, uniforms, vertexID % 4, splatID);
+    FragmentIn out = splatVertex(splat, uniforms, vertexID % 4, splatID);
+
+    ushort configuredCoefficientCount = ushort(min(uniforms.shCoefficientCount, 16u));
+    SplatSHCoefficients shCoefficients = splatSHArray[splatID];
+    float3 normal = safeNormalize(float3(out.normal), float3(0, 0, 1));
+    float3 viewDirection = safeNormalize(float3(out.viewDirection), float3(0, 0, 1));
+    float3 reflectionDirection = reflect(-viewDirection, normal);
+    out.diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, configuredCoefficientCount, normal);
+    out.specularSH = evaluateSplatSHForSpecular(shCoefficients, configuredCoefficientCount, reflectionDirection);
+
+    return out;
 }
 
 fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
@@ -92,6 +103,8 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
                                                      constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
                                                      constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
     FragmentStore out;
+
+    (void)splatSHArray;
 
     half alpha = splatFragmentAlpha(in.relativePosition, in.color.a); // restored: use real coverage
     if (alpha <= 0) {
@@ -103,14 +116,12 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
     half ao = computeAmbientOcclusion(in.color.a);
 
     Uniforms uniforms = uniformsArray.uniforms[min(int(viewIndex), kMaxViewCount)];
-    ushort configuredCoefficientCount = ushort(min(uniforms.shCoefficientCount, 16u));
-    SplatSHCoefficients shCoefficients = splatSHArray[in.splatIndex];
     float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
     float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
     float3 reflectionDirection = reflect(-viewDirection, normal);
 
-    float3 diffuseSH = evaluateSplatSHForDiffuse(shCoefficients, configuredCoefficientCount, normal);
-    float3 specularSH = evaluateSplatSHForSpecular(shCoefficients, configuredCoefficientCount, reflectionDirection);
+    float3 diffuseSH = in.diffuseSH;
+    float3 specularSH = in.specularSH;
 
     uint shMask = uniforms.useSHMask;
     if ((shMask & SphericalHarmonicsUsageDiffuse) == 0) {
@@ -159,6 +170,8 @@ vertex FragmentIn postprocessVertexShader(uint vertexID [[vertex_id]]) {
     out.worldPosition = float3(0);
     out.viewDirection = float3(0);
     out.splatIndex = 0;
+    out.diffuseSH = float3(0);
+    out.specularSH = float3(0);
     return out;
 }
 

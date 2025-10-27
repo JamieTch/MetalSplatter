@@ -317,6 +317,8 @@ FragmentIn splatVertex(Splat splat,
         out.worldPosition = float3(0);
         out.viewDirection = float3(0);
         out.splatIndex = splatIndex;
+        out.diffuseSH = float3(0);
+        out.specularSH = float3(0);
         return out;
     }
 
@@ -360,6 +362,8 @@ FragmentIn splatVertex(Splat splat,
     float3 viewDirection = safeNormalize(cameraPosition - worldPosition, float3(0, 0, 1));
     out.viewDirection = viewDirection;
     out.splatIndex = splatIndex;
+    out.diffuseSH = float3(0);
+    out.specularSH = float3(0);
     return out;
 }
 

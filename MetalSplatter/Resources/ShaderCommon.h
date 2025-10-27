@@ -103,4 +103,6 @@ typedef struct
     float3 worldPosition;
     float3 viewDirection;
     uint  splatIndex;
+    float3 diffuseSH [[flat]];
+    float3 specularSH [[flat]];
 } FragmentIn;
