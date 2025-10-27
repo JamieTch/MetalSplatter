@@ -91,6 +91,29 @@ public class SplatRenderer {
         )
     }
 
+    private static func sanitizeSphericalHarmonics(_ coefficients: [SIMD3<Float>],
+                                                    pointIndex: Int) -> [SIMD3<Float>] {
+        coefficients.enumerated().map { index, coefficient in
+            sanitizeVector(coefficient,
+                           defaultValue: .zero,
+                           field: "sh[\(index)]",
+                           pointIndex: pointIndex)
+        }
+    }
+
+    private enum SphericalHarmonicConstants {
+        static let maxCoefficientCount = 16
+        static let activationClamp: Float = 0.8
+    }
+
+    private static func activateSphericalHarmonics(_ coefficients: [SIMD3<Float>]) -> [SIMD3<Float>] {
+        coefficients.enumerated().map { index, coefficient in
+            guard index > 0 else { return coefficient }
+            let clampValue = SIMD3<Float>(repeating: SphericalHarmonicConstants.activationClamp)
+            return simd_clamp(coefficient, -clampValue, clampValue)
+        }
+    }
+
     private static func sanitizeColor(_ color: SIMD4<Float>, pointIndex: Int) -> SIMD4<Float> {
         let sanitized = sanitizeVector(color, defaultValue: SIMD4<Float>(repeating: 0), field: "color", pointIndex: pointIndex)
         return simd_clamp(sanitized, SIMD4<Float>(repeating: 0), SIMD4<Float>(repeating: 1))
@@ -288,6 +311,56 @@ public class SplatRenderer {
         var a: Float16
     }
 
+    struct SplatSHCoefficients {
+        static let maxCoefficientCount = SphericalHarmonicConstants.maxCoefficientCount
+
+        var count: UInt16
+        var padding: UInt16 = 0
+        var coefficient0: PackedHalf3
+        var coefficient1: PackedHalf3
+        var coefficient2: PackedHalf3
+        var coefficient3: PackedHalf3
+        var coefficient4: PackedHalf3
+        var coefficient5: PackedHalf3
+        var coefficient6: PackedHalf3
+        var coefficient7: PackedHalf3
+        var coefficient8: PackedHalf3
+        var coefficient9: PackedHalf3
+        var coefficient10: PackedHalf3
+        var coefficient11: PackedHalf3
+        var coefficient12: PackedHalf3
+        var coefficient13: PackedHalf3
+        var coefficient14: PackedHalf3
+        var coefficient15: PackedHalf3
+
+        init(coefficients: [SIMD3<Float>]) {
+            let clamped = Array(coefficients.prefix(Self.maxCoefficientCount))
+            self.count = UInt16(clamped.count)
+
+            func packedCoefficient(at index: Int) -> PackedHalf3 {
+                guard index < clamped.count else { return SplatRenderer.packHalf3(.zero) }
+                return SplatRenderer.packHalf3(clamped[index])
+            }
+
+            self.coefficient0 = packedCoefficient(at: 0)
+            self.coefficient1 = packedCoefficient(at: 1)
+            self.coefficient2 = packedCoefficient(at: 2)
+            self.coefficient3 = packedCoefficient(at: 3)
+            self.coefficient4 = packedCoefficient(at: 4)
+            self.coefficient5 = packedCoefficient(at: 5)
+            self.coefficient6 = packedCoefficient(at: 6)
+            self.coefficient7 = packedCoefficient(at: 7)
+            self.coefficient8 = packedCoefficient(at: 8)
+            self.coefficient9 = packedCoefficient(at: 9)
+            self.coefficient10 = packedCoefficient(at: 10)
+            self.coefficient11 = packedCoefficient(at: 11)
+            self.coefficient12 = packedCoefficient(at: 12)
+            self.coefficient13 = packedCoefficient(at: 13)
+            self.coefficient14 = packedCoefficient(at: 14)
+            self.coefficient15 = packedCoefficient(at: 15)
+        }
+    }
+
     // Keep in sync with Shaders.metal : Splat
     struct Splat {
         var position: MTLPackedFloat3
@@ -377,16 +450,21 @@ public class SplatRenderer {
     typealias IndexType = UInt32
     // splatBuffer contains one entry for each gaussian splat
     var splatBuffer: MetalBuffer<Splat>
+    var splatSHBuffer: MetalBuffer<SplatSHCoefficients>
     // splatBufferPrime is a copy of splatBuffer, which is not currenly in use for rendering.
     // We use this for sorting, and when we're done, swap it with splatBuffer.
     // There's a good chance that we'll sometimes end up sorting a splatBuffer still in use for
     // rendering.
     // TODO: Replace this with a more robust multiple-buffer scheme to guarantee we're never actively sorting a buffer still in use for rendering
     var splatBufferPrime: MetalBuffer<Splat>
+    var splatSHBufferPrime: MetalBuffer<SplatSHCoefficients>
 
     var indexBuffer: MetalBuffer<UInt32>
 
-    public var splatCount: Int { splatBuffer.count }
+    public var splatCount: Int {
+        assert(splatBuffer.count == splatSHBuffer.count)
+        return splatBuffer.count
+    }
 
     var sorting = false
     var orderAndDepthTempSort: [SplatIndexAndDepth] = []
@@ -423,7 +501,9 @@ public class SplatRenderer {
         self.uniforms = UnsafeMutableRawPointer(dynamicUniformBuffers.contents()).bindMemory(to: UniformsArray.self, capacity: 1)
 
         self.splatBuffer = try MetalBuffer(device: device)
+        self.splatSHBuffer = try MetalBuffer(device: device)
         self.splatBufferPrime = try MetalBuffer(device: device)
+        self.splatSHBufferPrime = try MetalBuffer(device: device)
         self.indexBuffer = try MetalBuffer(device: device)
 
 #if !arch(x86_64)
@@ -441,6 +521,8 @@ public class SplatRenderer {
     public func reset() {
         splatBuffer.count = 0
         try? splatBuffer.setCapacity(0)
+        splatSHBuffer.count = 0
+        try? splatSHBuffer.setCapacity(0)
     }
 
     public func setEnvironmentMap(_ texture: MTLTexture?) throws {
@@ -643,7 +725,9 @@ public class SplatRenderer {
     }
 
     public func ensureAdditionalCapacity(_ pointCount: Int) throws {
-        try splatBuffer.ensureCapacity(splatBuffer.count + pointCount)
+        let requiredCapacity = splatBuffer.count + pointCount
+        try splatBuffer.ensureCapacity(requiredCapacity)
+        try splatSHBuffer.ensureCapacity(requiredCapacity)
     }
 
     public func add(_ points: [SplatScenePoint]) throws {
@@ -658,6 +742,14 @@ public class SplatRenderer {
         for (offset, point) in points.enumerated() {
             let index = startIndex + offset
             splatBuffer.append(Splat(point, index: index))
+
+            let sanitizedCoefficients = Array(
+                Self.sanitizeSphericalHarmonics(point.color.asSphericalHarmonic,
+                                                pointIndex: index)
+                    .prefix(SphericalHarmonicConstants.maxCoefficientCount)
+            )
+            let activatedCoefficients = Self.activateSphericalHarmonics(sanitizedCoefficients)
+            splatSHBuffer.append(SplatSHCoefficients(coefficients: activatedCoefficients))
         }
     }
 
@@ -906,8 +998,8 @@ public class SplatRenderer {
                        to commandBuffer: MTLCommandBuffer) throws {
         beginTelemetryFrame()
 
-        let splatCount = splatBuffer.count
-        guard splatBuffer.count != 0 else { return }
+        let splatCount = self.splatCount
+        guard splatCount != 0 else { return }
         let indexedSplatCount = min(splatCount, Constants.maxIndexedSplatCount)
         let instanceCount = (splatCount + indexedSplatCount - 1) / indexedSplatCount
 
@@ -1065,7 +1157,7 @@ public class SplatRenderer {
         onSortStart?()
         let sortStartTime = Date()
 
-        let splatCount = splatBuffer.count
+        let splatCount = self.splatCount
 
         let cameraWorldForward = cameraWorldForward
         let cameraWorldPosition = cameraWorldPosition
@@ -1099,12 +1191,16 @@ public class SplatRenderer {
             do {
                 try splatBufferPrime.setCapacity(splatCount)
                 splatBufferPrime.count = 0
+                try splatSHBufferPrime.setCapacity(splatCount)
+                splatSHBufferPrime.count = 0
                 for newIndex in 0..<orderAndDepthTempSort.count {
                     let oldIndex = Int(orderAndDepthTempSort[newIndex].index)
                     splatBufferPrime.append(splatBuffer, fromIndex: oldIndex)
+                    splatSHBufferPrime.append(splatSHBuffer, fromIndex: oldIndex)
                 }
 
                 swap(&splatBuffer, &splatBufferPrime)
+                swap(&splatSHBuffer, &splatSHBufferPrime)
             } catch {
                 Self.log.error("Failed to resort splats: \(String(describing: error), privacy: .public)")
             }
