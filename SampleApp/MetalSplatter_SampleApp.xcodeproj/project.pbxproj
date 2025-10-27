@@ -26,9 +26,11 @@
 		61791E022B415D3F00302B57 /* SampleBoxRenderer in Frameworks */ = {isa = PBXBuildFile; productRef = 61791E012B415D3F00302B57 /* SampleBoxRenderer */; };
 		61791E102B41688000302B57 /* MetalKitSceneRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E0E2B41685800302B57 /* MetalKitSceneRenderer.swift */; };
 		61791E132B416DD700302B57 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E112B416DCF00302B57 /* Constants.swift */; };
-		61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
-		617E50C92B314C4800F99766 /* PLYIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50C82B314C4800F99766 /* PLYIO */; };
-		617E50CB2B314C4800F99766 /* SplatIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50CA2B314C4800F99766 /* SplatIO */; };
+                61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E142B42294700302B57 /* MetalKitSceneView.swift */; };
+                617E50C92B314C4800F99766 /* PLYIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50C82B314C4800F99766 /* PLYIO */; };
+                617E50CB2B314C4800F99766 /* SplatIO in Frameworks */ = {isa = PBXBuildFile; productRef = 617E50CA2B314C4800F99766 /* SplatIO */; };
+                61B9F0A12BC4D50000AA0001 /* PreloadedGaussianModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */; };
+                61B9F0A32BC4D50000AA0001 /* GaussianSplats in Resources */ = {isa = PBXBuildFile; fileRef = 61B9F0A22BC4D50000AA0001 /* GaussianSplats */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,7 +53,9 @@
                 61A1AA002B7C000100A1AA00 /* EnvironmentProbeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentProbeManager.swift; sourceTree = "<group>"; };
                 61A1AA042B7C000100A1AA00 /* EnvironmentPrefilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentPrefilter.swift; sourceTree = "<group>"; };
                 61A1AA082B7C000100A1AA00 /* EnvironmentPrefilter.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = EnvironmentPrefilter.metal; sourceTree = "<group>"; };
-		617E50B02B314BE200F99766 /* MetalSplatter SampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MetalSplatter SampleApp.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+                617E50B02B314BE200F99766 /* MetalSplatter SampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MetalSplatter SampleApp.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+                61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreloadedGaussianModel.swift; sourceTree = "<group>"; };
+                61B9F0A22BC4D50000AA0001 /* GaussianSplats */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GaussianSplats; path = GaussianSplats; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,17 +73,26 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		610347DF2B4689DB00693CE3 /* Model */ = {
-			isa = PBXGroup;
-			children = (
-				61791DDB2B4154FB00302B57 /* ModelIdentifier.swift */,
-				61791DDE2B4154FB00302B57 /* ModelRenderer.swift */,
-				61791DDC2B4154FB00302B57 /* SampleBoxRenderer+ModelRenderer.swift */,
-				61791DDA2B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift */,
-			);
-			path = Model;
-			sourceTree = "<group>";
-		};
+                610347DF2B4689DB00693CE3 /* Model */ = {
+                        isa = PBXGroup;
+                        children = (
+                                61791DDB2B4154FB00302B57 /* ModelIdentifier.swift */,
+                                61791DDE2B4154FB00302B57 /* ModelRenderer.swift */,
+                                61791DDC2B4154FB00302B57 /* SampleBoxRenderer+ModelRenderer.swift */,
+                                61791DDA2B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift */,
+                                61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */,
+                        );
+                        path = Model;
+                        sourceTree = "<group>";
+                };
+                61B9F0A42BC4D50000AA0001 /* Resources */ = {
+                        isa = PBXGroup;
+                        children = (
+                                61B9F0A22BC4D50000AA0001 /* GaussianSplats */,
+                        );
+                        path = Resources;
+                        sourceTree = "<group>";
+                };
                 610347E02B468A0000693CE3 /* Scene */ = {
                         isa = PBXGroup;
                         children = (
@@ -129,20 +142,21 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		61E3FD792AE5CB0200032652 = {
-			isa = PBXGroup;
-			children = (
-				610347E22B468A1100693CE3 /* App */,
-				610347E12B468A0B00693CE3 /* Util */,
-				610347E02B468A0000693CE3 /* Scene */,
-				610347DF2B4689DB00693CE3 /* Model */,
-				61791DF82B41551F00302B57 /* Info.plist */,
-				61791DC32B41514300302B57 /* Assets.xcassets */,
-				61E3FD832AE5CB0200032652 /* Products */,
-				619832682AF0BC390022500D /* Frameworks */,
-			);
-			sourceTree = "<group>";
-		};
+                61E3FD792AE5CB0200032652 = {
+                        isa = PBXGroup;
+                        children = (
+                                610347E22B468A1100693CE3 /* App */,
+                                610347E12B468A0B00693CE3 /* Util */,
+                                610347E02B468A0000693CE3 /* Scene */,
+                                610347DF2B4689DB00693CE3 /* Model */,
+                                61B9F0A42BC4D50000AA0001 /* Resources */,
+                                61791DF82B41551F00302B57 /* Info.plist */,
+                                61791DC32B41514300302B57 /* Assets.xcassets */,
+                                61E3FD832AE5CB0200032652 /* Products */,
+                                619832682AF0BC390022500D /* Frameworks */,
+                        );
+                        sourceTree = "<group>";
+                };
 		61E3FD832AE5CB0200032652 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -214,13 +228,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		617E50AE2B314BE200F99766 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
+                617E50AE2B314BE200F99766 /* Resources */ = {
+                        isa = PBXResourcesBuildPhase;
+                        buildActionMask = 2147483647;
+                        files = (
+                                61B9F0A32BC4D50000AA0001 /* GaussianSplats in Resources */,
+                        );
+                        runOnlyForDeploymentPostprocessing = 0;
+                };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -235,6 +250,7 @@
                                 61791DE42B4154FB00302B57 /* SampleBoxRenderer+ModelRenderer.swift in Sources */,
                                 61791DEA2B4154FB00302B57 /* MatrixMathUtil.swift in Sources */,
                                 610347DB2B46875700693CE3 /* VisionSceneRenderer.swift in Sources */,
+                                61B9F0A12BC4D50000AA0001 /* PreloadedGaussianModel.swift in Sources */,
                                 610347D92B46864500693CE3 /* SampleApp.swift in Sources */,
                                 61791E102B41688000302B57 /* MetalKitSceneRenderer.swift in Sources */,
                                 61A1AA072B7C000100A1AA00 /* EnvironmentPrefilter.swift in Sources */,
