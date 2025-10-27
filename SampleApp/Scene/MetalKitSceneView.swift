@@ -11,6 +11,7 @@ private typealias ViewRepresentable = UIViewRepresentable
 
 struct MetalKitSceneView: ViewRepresentable {
     var modelIdentifier: ModelIdentifier?
+    @EnvironmentObject private var rendererSettings: RendererSettings
 
     class Coordinator {
         var renderer: MetalKitSceneRenderer?
@@ -54,6 +55,8 @@ struct MetalKitSceneView: ViewRepresentable {
         coordinator.renderer = renderer
         metalKitView.delegate = renderer
 
+        renderer?.debugViewMode = rendererSettings.debugViewMode
+
         Task {
             do {
                 try await renderer?.load(modelIdentifier)
@@ -77,6 +80,7 @@ struct MetalKitSceneView: ViewRepresentable {
 
     private func updateView(_ coordinator: Coordinator) {
         guard let renderer = coordinator.renderer else { return }
+        renderer.debugViewMode = rendererSettings.debugViewMode
         Task {
             do {
                 try await renderer.load(modelIdentifier)

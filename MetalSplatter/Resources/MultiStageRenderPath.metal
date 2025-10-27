@@ -3,10 +3,19 @@
 
 // Debug visualization selector:
 // 0: coverage (alpha), 1: albedo, 2: normal, 3: roughness, 4: metallic, 5: AO, 6: depth, 7: shaded (default)
+// Debug view selection driven by UI (function constant).
 // 28: diffuse SH only, 29: specular SH only
-#ifndef DEBUG_VIEW
-#define DEBUG_VIEW 1
-#endif
+constant uint DEBUG_VIEW [[function_constant(0)]];
+constant bool _DEBUG_VIEW_IS_SET = is_function_constant_defined(DEBUG_VIEW);
+constant uint DEBUG_VIEW_VALUE = _DEBUG_VIEW_IS_SET ? DEBUG_VIEW : 1; // default fallback
+
+// Optional alias so existing code can still read DEBUG_VIEW:
+#define DEBUG_VIEW DEBUG_VIEW_VALUE
+
+// --- Legacy macro-based path (disabled) ---
+// #ifndef DEBUG_VIEW
+// #define DEBUG_VIEW 1
+// #endif
 
 // ---- Normal decoding controls (tweak and rebuild) ----
 #ifndef NORMAL_STORAGE_01
@@ -237,57 +246,62 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     half3 normal_raw = normalize(normal);
     half3 normal_dec = decodeNormal(normal);
 
-    float3 shadingNormal = safeNormalize(float3(normal_dec), float3(0, 0, 1));
-    float3 shadingView = safeNormalize(float3(viewDir), float3(0, 0, 1));
-    float3 shadingReflection = reflect(-shadingView, shadingNormal);
+// assumes you already defined:
+// constant uint DEBUG_VIEW [[function_constant(0)]];
+// constant bool _DEBUG_VIEW_IS_SET = is_function_constant_defined(DEBUG_VIEW);
+// constant uint DEBUG_VIEW_VALUE = _DEBUG_VIEW_IS_SET ? DEBUG_VIEW : 1;
 
-#if DEBUG_VIEW == 1
+float3 shadingNormal     = safeNormalize(float3(normal_dec), float3(0, 0, 1));
+float3 shadingView       = safeNormalize(float3(viewDir),    float3(0, 0, 1));
+float3 shadingReflection = reflect(-shadingView, shadingNormal);
+
+// Debug outputs (early returns). If none matches, continue with regular shading below.
+if (DEBUG_VIEW_VALUE == 1) {
     // Albedo
     return half4(albedo, 1);
-#elif DEBUG_VIEW == 2
+} else if (DEBUG_VIEW_VALUE == 2) {
     // Normal (visualized as 0..1)
     return half4(normalize(normal) * 0.5h + 0.5h, 1);
-#elif DEBUG_VIEW == 3
+} else if (DEBUG_VIEW_VALUE == 3) {
     // Roughness
     return half4(roughness, roughness, roughness, 1);
-#elif DEBUG_VIEW == 4
+} else if (DEBUG_VIEW_VALUE == 4) {
     // Metallic
     return half4(metallic, metallic, metallic, 1);
-#elif DEBUG_VIEW == 5
+} else if (DEBUG_VIEW_VALUE == 5) {
     // Ambient occlusion
     return half4(ao, ao, ao, 1);
-#elif DEBUG_VIEW == 21
-    // Albedo visualized after sRGB->linear conversion (diagnostic)
+} else if (DEBUG_VIEW_VALUE == 21) {
+    // Albedo after sRGB->linear (diagnostic)
     return half4(srgbToLinear(albedo), 1);
-#elif DEBUG_VIEW == 22
-    // Roughness (duplicate of 3, kept for explicit material sweep)
+} else if (DEBUG_VIEW_VALUE == 22) {
+    // Roughness (duplicate of 3 for sweep)
     return half4(roughness, roughness, roughness, 1);
-#elif DEBUG_VIEW == 23
-    // Metallic (duplicate of 4, kept for explicit material sweep)
+} else if (DEBUG_VIEW_VALUE == 23) {
+    // Metallic (duplicate of 4 for sweep)
     return half4(metallic, metallic, metallic, 1);
-#elif DEBUG_VIEW == 24
-    // Normal (duplicate of 2, kept for explicit material sweep)
+} else if (DEBUG_VIEW_VALUE == 24) {
+    // Normal (duplicate of 2 for sweep)
     return half4(normal_dec * 0.5h + 0.5h, 1);
-#elif DEBUG_VIEW == 25
-    // Raw-as-is normal visualization (before decode)
+} else if (DEBUG_VIEW_VALUE == 25) {
+    // Raw (pre-decode) normal visualization
     return half4(normal_raw * 0.5h + 0.5h, 1);
-#elif DEBUG_VIEW == 26
-    // Difference heatmap between decoded and raw normals
-    {
+}
+
+// NOTE: case 26 (“difference heatmap”) was omitted here because its body
+// wasn't present in your snippet. Add it later if needed.
+
+// If we get here, proceed with your regular PBR/SH shading…
         half3 diff = abs(normal_dec - normal_raw);
         return half4(diff, 1);
-    }
-#elif DEBUG_VIEW == 27
-    // N·V comparison: R=using decoded normal, G=using raw normal
-    {
+    } else if (DEBUG_VIEW_VALUE == 27) {
+        // N·V comparison: R=using decoded normal, G=using raw normal
         half3 V = normalize(viewDir);
         half ndv_dec = saturate(dot(normal_dec, V));
         half ndv_raw = saturate(dot(normal_raw, V));
         return half4(ndv_dec, ndv_raw, 0.0h, 1);
-    }
-#elif DEBUG_VIEW == 8
-    // Shaded result with AO forced to 1 (tests if AO is zeroing energy)
-    {
+    } else if (DEBUG_VIEW_VALUE == 8) {
+        // Shaded result with AO forced to 1 (tests if AO is zeroing energy)
         half3 shaded = shadeGaussian(albedo,
                                      metallic,
                                      roughness,
@@ -302,71 +316,79 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
                                      environmentSampler,
                                      brdfSampler);
         return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-    }
-#elif DEBUG_VIEW == 9
-    // Direct environment reflection sample (tests env binding/indices)
-    {
+    } else if (DEBUG_VIEW_VALUE == 9) {
+        // Direct environment reflection sample (tests env binding/indices)
         half3 N = normalize(normal);
         half3 V = normalize(viewDir);
         half3 R = reflect(-V, N);
         half3 env = environmentMap.sample(environmentSampler, float3(R)).rgb;
         return half4(env, 1);
-    }
-#elif DEBUG_VIEW == 10
-    // N·V visualization (tests geometry/normal-view relationship)
-    {
+    } else if (DEBUG_VIEW_VALUE == 10) {
+        // N·V visualization (tests geometry/normal-view relationship)
         half3 N = normalize(normal);
         half3 V = normalize(viewDir);
         half ndv = saturate(dot(N, V));
         return half4(ndv, ndv, ndv, 1);
-    }
-#elif DEBUG_VIEW == 12
-    // Simple Lambert with a fixed key light (no env/BRDF) to prove shading path works
-    {
+    } else if (DEBUG_VIEW_VALUE == 12) {
+        // Simple Lambert with a fixed key light (no env/BRDF) to prove shading path works
         half3 N = normalize(normal);
         half3 L = normalize(half3(0.4h, 0.8h, 0.4h));
         half ndl = saturate(dot(N, L));
         half3 lit = albedo * ndl;
         return half4(lit * accumulatedAlpha, accumulatedAlpha);
-    }
-#elif DEBUG_VIEW == 13
-    // BRDF LUT debug: show LUT sample at center to validate BRDF binding
-    {
+    } else if (DEBUG_VIEW_VALUE == 13) {
+        // BRDF LUT debug: show LUT sample at center to validate BRDF binding
         half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
         return half4(l.x, l.y, 0, 1);
+    } else if (DEBUG_VIEW_VALUE == 7) {
+        // Shaded result (uses environment)
+        half3 shaded = shadeGaussian(albedo,
+                                     metallic,
+                                     roughness,
+                                     normal_dec,
+                                     viewDir,
+                                     ao,
+                                     environmentMap,
+                                     brdfLUT,
+                                     environmentSampler,
+                                     brdfSampler);
+        return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+    } else {
+        // Coverage and depth handled in postprocess
+        return half4(0);
     }
-#elif DEBUG_VIEW == 28
+// UI-driven debug modes (function constant)
+// 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
+
+if (DEBUG_VIEW_VALUE == 28) {
     // Diffuse spherical harmonics contribution only (accumulated)
-    {
-        half3 sh = half3(diffuseSH) * accumulatedAlpha;
-        return half4(sh, accumulatedAlpha);
-    }
-#elif DEBUG_VIEW == 29
+    half3 sh = half3(diffuseSH) * accumulatedAlpha;
+    return half4(sh, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 29) {
     // Specular spherical harmonics contribution only (accumulated)
-    {
-        half3 sh = half3(specularSH) * accumulatedAlpha;
-        return half4(sh, accumulatedAlpha);
-    }
-#elif DEBUG_VIEW == 7
+    half3 sh = half3(specularSH) * accumulatedAlpha;
+    return half4(sh, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 7) {
     // Shaded result (uses environment)
-    half3 shaded = shadeGaussian(albedo,
-                                 metallic,
-                                 roughness,
-                                 shadingNormal,
-                                 shadingView,
-                                 shadingReflection,
-                                 ao,
-                                 diffuseSH,
-                                 specularSH,
-                                 environmentMap,
-                                 brdfLUT,
-                                 environmentSampler,
-                                 brdfSampler);
+    half3 shaded = shadeGaussian(
+        albedo,
+        metallic,
+        roughness,
+        shadingNormal,
+        shadingView,
+        shadingReflection,
+        ao,
+        diffuseSH,
+        specularSH,
+        environmentMap,
+        brdfLUT,
+        environmentSampler,
+        brdfSampler
+    );
     return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-#else
+} else {
     // Coverage and depth handled in postprocess
     return half4(0);
-#endif
 }
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
@@ -379,20 +401,18 @@ fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[i
         half accumulatedAlpha = fragmentValues.viewAlpha.w;
         out.depth = (accumulatedAlpha == 0) ? 0 : fragmentValues.depth / accumulatedAlpha;
 
-#if DEBUG_VIEW == 0
-        // Coverage view (grayscale alpha)
-        half a = clamp(accumulatedAlpha, 0.0h, 1.0h);
-        out.color = half4(a, a, a, 1);
-        return out;
-#elif DEBUG_VIEW == 6
-        // Depth visualization mapped to [0,1]
-        half d = half(out.depth);
-        out.color = half4(d, d, d, 1);
-        return out;
-#elif DEBUG_VIEW == 11
-        // Direct environment sample (panorama from screen UV -> direction), ignores accumulation
-        {
-            // Map NDC to [0,1]
+        if (DEBUG_VIEW_VALUE == 0) {
+            // Coverage view (grayscale alpha)
+            half a = clamp(accumulatedAlpha, 0.0h, 1.0h);
+            out.color = half4(a, a, a, 1);
+            return out;
+        } else if (DEBUG_VIEW_VALUE == 6) {
+            // Depth visualization mapped to [0,1]
+            half d = half(out.depth);
+            out.color = half4(d, d, d, 1);
+            return out;
+        } else if (DEBUG_VIEW_VALUE == 11) {
+            // Direct environment sample (panorama from screen UV -> direction), ignores accumulation
             float2 uv = float2((fragmentValues.viewAlpha.x + 1.0f) * 0.5f, (fragmentValues.viewAlpha.y + 1.0f) * 0.5f);
             // Equirectangular-like mapping to direction (yaw=pitch)
             float phi = (uv.x * 2.0f - 1.0f) * M_PI_F;        // -pi..pi
@@ -401,33 +421,28 @@ fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[i
             half3 env = environmentMap.sample(environmentSampler, dir).rgb;
             out.color = half4(env, 1);
             return out;
-        }
-#elif DEBUG_VIEW == 14
-        // Env sample at fixed direction, forced LOD 0
-        {
+        } else if (DEBUG_VIEW_VALUE == 14) {
+            // Env sample at fixed direction, forced LOD 0
             float3 dir = float3(0.0, 1.0, 0.0);
             half3 env = environmentMap.sample(environmentSampler, dir, level(0.0)).rgb;
             out.color = half4(env, 1);
             return out;
-        }
-#elif DEBUG_VIEW == 15
-        // Env sample at fixed direction, largest mip (very blurred)
-        {
+        } else if (DEBUG_VIEW_VALUE == 15) {
+            // Env sample at fixed direction, largest mip (very blurred)
             float3 dir = float3(0.0, 1.0, 0.0);
             float maxLevel = log2((float)environmentMap.get_width());
             half3 env = environmentMap.sample(environmentSampler, dir, level(maxLevel)).rgb;
             out.color = half4(env, 1);
             return out;
+        } else {
+            // Use resolveFragmentValues for attribute views or shaded output
+            out.color = resolveFragmentValues(fragmentValues,
+                                              environmentMap,
+                                              brdfLUT,
+                                              environmentSampler,
+                                              brdfSampler);
+            return out;
         }
-#else
-        // Use resolveFragmentValues for attribute views or shaded output
-        out.color = resolveFragmentValues(fragmentValues,
-                                          environmentMap,
-                                          brdfLUT,
-                                          environmentSampler,
-                                          brdfSampler);
-        return out;
-#endif
     }
 }
 
@@ -438,19 +453,19 @@ fragment half4 postprocessFragmentShaderNoDepth(FragmentValues fragmentValues [[
                                                sampler brdfSampler [[sampler(1)]]) {
     {
         // No depth resolve path — choose debug view or shaded like the main postprocess
-#if DEBUG_VIEW == 0
-        // Coverage is not available without depth resolve; show AO as a proxy
-        half a = fragmentValues.ambientOcclusion.x;
-        return half4(a, a, a, 1);
-#elif DEBUG_VIEW == 6
-        // No depth resolve here; return black
-        return half4(0,0,0,1);
-#else
-        return resolveFragmentValues(fragmentValues,
-                                     environmentMap,
-                                     brdfLUT,
-                                     environmentSampler,
-                                     brdfSampler);
-#endif
+        if (DEBUG_VIEW_VALUE == 0) {
+            // Coverage is not available without depth resolve; show AO as a proxy
+            half a = fragmentValues.ambientOcclusion.x;
+            return half4(a, a, a, 1);
+        } else if (DEBUG_VIEW_VALUE == 6) {
+            // No depth resolve here; return black
+            return half4(0,0,0,1);
+        } else {
+            return resolveFragmentValues(fragmentValues,
+                                         environmentMap,
+                                         brdfLUT,
+                                         environmentSampler,
+                                         brdfSampler);
+        }
     }
 }

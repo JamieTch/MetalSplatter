@@ -38,6 +38,32 @@ public class SplatRenderer {
     private static let signposter = OSSignposter(logger: log)
 #endif
 
+    public enum DebugViewMode: UInt, CaseIterable {
+        case coverage = 0
+        case albedo = 1
+        case normal = 2
+        case roughness = 3
+        case metallic = 4
+        case ambientOcclusion = 5
+        case depth = 6
+        case shaded = 7
+        case shadedAmbientOcclusionUnity = 8
+        case environmentReflection = 9
+        case normalViewRelationship = 10
+        case environmentPanorama = 11
+        case lambert = 12
+        case brdfLookup = 13
+        case environmentFixedLod0 = 14
+        case environmentFixedMaxLod = 15
+        case albedoLinear = 21
+        case roughnessSweep = 22
+        case metallicSweep = 23
+        case normalSweep = 24
+        case normalRaw = 25
+        case normalDifference = 26
+        case normalDotComparison = 27
+    }
+
     public enum Error: Swift.Error, LocalizedError {
         case invalidMaterialResource(resource: String, reason: String)
 
@@ -393,6 +419,13 @@ public class SplatRenderer {
      */
     public var highQualityDepth: Bool = true
 
+    public var debugViewMode: DebugViewMode = .albedo {
+        didSet {
+            guard oldValue != debugViewMode else { return }
+            resetPipelineStates()
+        }
+    }
+
     private var writeDepth: Bool {
         depthFormat != .invalid
     }
@@ -611,6 +644,13 @@ public class SplatRenderer {
         postprocessDepthState = nil
     }
 
+    private func makeDebugViewFunction(named name: String) -> MTLFunction {
+        var value = UInt32(debugViewMode.rawValue)
+        let constants = MTLFunctionConstantValues()
+        constants.setConstantValue(&value, type: .uint, index: 0)
+        return library.makeRequiredFunction(name: name, constantValues: constants)
+    }
+
     private func buildSingleStagePipelineStatesIfNeeded() throws {
         guard singleStagePipelineState == nil else { return }
 
@@ -686,7 +726,7 @@ public class SplatRenderer {
 
         pipelineDescriptor.label = "DrawSplatPipeline"
         pipelineDescriptor.vertexFunction = library.makeRequiredFunction(name: "multiStageSplatVertexShader")
-        pipelineDescriptor.fragmentFunction = library.makeRequiredFunction(name: "multiStageSplatFragmentShader")
+        pipelineDescriptor.fragmentFunction = makeDebugViewFunction(named: "multiStageSplatFragmentShader")
 
         pipelineDescriptor.rasterSampleCount = sampleCount
 
@@ -717,8 +757,8 @@ public class SplatRenderer {
             library.makeRequiredFunction(name: "postprocessVertexShader")
         pipelineDescriptor.fragmentFunction =
             writeDepth
-            ? library.makeRequiredFunction(name: "postprocessFragmentShader")
-            : library.makeRequiredFunction(name: "postprocessFragmentShaderNoDepth")
+            ? makeDebugViewFunction(named: "postprocessFragmentShader")
+            : makeDebugViewFunction(named: "postprocessFragmentShaderNoDepth")
 
         pipelineDescriptor.colorAttachments[0]!.pixelFormat = colorFormat
         pipelineDescriptor.depthAttachmentPixelFormat = depthFormat
@@ -1380,5 +1420,13 @@ private extension MTLLibrary {
             fatalError("Unable to load required shader function: \"\(name)\"")
         }
         return result
+    }
+
+    func makeRequiredFunction(name: String, constantValues: MTLFunctionConstantValues) -> MTLFunction {
+        do {
+            return try makeFunction(name: name, constantValues: constantValues)
+        } catch {
+            fatalError("Unable to load required shader function: \"\(name)\" with constants: \(error)")
+        }
     }
 }

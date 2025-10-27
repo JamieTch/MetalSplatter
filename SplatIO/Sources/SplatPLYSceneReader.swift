@@ -136,7 +136,7 @@ private struct ElementInputMapping {
     }
 
     enum Albedo {
-        case float32(SIMD3<Int>)
+        case float32(SIMD3<Int>, girRaw: Bool)
         case uint8(SIMD3<Int>)
     }
 
@@ -237,7 +237,15 @@ private struct ElementInputMapping {
         if let albedoRFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoR, type: .float32),
            let albedoGFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoG, type: .float32),
            let albedoBFloatPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoB, type: .float32) {
-            albedoPropertyIndices = .float32(SIMD3(albedoRFloatPropertyIndex, albedoGFloatPropertyIndex, albedoBFloatPropertyIndex))
+            let indices = SIMD3(albedoRFloatPropertyIndex, albedoGFloatPropertyIndex, albedoBFloatPropertyIndex)
+            let propertyNames: Set<String> = Set([
+                headerElement.properties[albedoRFloatPropertyIndex].name,
+                headerElement.properties[albedoGFloatPropertyIndex].name,
+                headerElement.properties[albedoBFloatPropertyIndex].name
+            ])
+            let girRawNames: Set<String> = ["albedo_r", "albedo_g", "albedo_b"]
+            let isGIRRaw = propertyNames == girRawNames
+            albedoPropertyIndices = .float32(indices, girRaw: isGIRRaw)
         } else if let albedoRUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoR, type: .uint8),
                     let albedoGUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoG, type: .uint8),
                     let albedoBUIntPropertyIndex = try headerElement.index(forOptionalPropertyNamed: SplatPLYConstants.PropertyName.albedoB, type: .uint8) {
@@ -323,13 +331,17 @@ private struct ElementInputMapping {
 
         if let albedoPropertyIndices {
             switch albedoPropertyIndices {
-            case .float32(let propertyIndices):
+            case .float32(let propertyIndices, girRaw: let isGIRRaw):
                 let values = try element.float32Vector(forPropertyIndices: propertyIndices)
-                let maxComponent = max(values.x, max(values.y, values.z))
-                if maxComponent > ElementInputMapping.float256Threshold {
-                    result.setAlbedo(.linearFloat256(values))
+                if isGIRRaw {
+                    result.setAlbedo(.girRawLinearFloat(values))
                 } else {
-                    result.setAlbedo(.linearFloat(values))
+                    let maxComponent = max(values.x, max(values.y, values.z))
+                    if maxComponent > ElementInputMapping.float256Threshold {
+                        result.setAlbedo(.linearFloat256(values))
+                    } else {
+                        result.setAlbedo(.linearFloat(values))
+                    }
                 }
             case .uint8(let propertyIndices):
                 let values = try element.uint8Vector(forPropertyIndices: propertyIndices)
