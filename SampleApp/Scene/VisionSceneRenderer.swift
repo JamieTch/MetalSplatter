@@ -136,8 +136,9 @@ class VisionSceneRenderer {
 
         handUpdateTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            for await anchors in self.handTracking.handUpdates {
-                self.cacheHandAnchors(anchors)
+            for await update in self.handTracking.anchorUpdates {
+                let anchor = update.anchor
+                self.cacheHandAnchors([anchor])
             }
         }
     }
@@ -474,7 +475,7 @@ class VisionSceneRenderer {
 
             let thumbPosition = jointPosition(.thumbTip, skeleton: skeleton, anchorTransform: anchorTransform)
             let indexPosition = jointPosition(.indexFingerTip, skeleton: skeleton, anchorTransform: anchorTransform)
-            let palmPosition = jointPosition(.palm, skeleton: skeleton, anchorTransform: anchorTransform)
+            let palmPosition = jointPosition(.wrist, skeleton: skeleton, anchorTransform: anchorTransform)
 
             let isPinching: Bool
             let pinchPosition: SIMD3<Float>?
@@ -509,13 +510,13 @@ class VisionSceneRenderer {
                                skeleton: HandSkeleton?,
                                anchorTransform: simd_float4x4) -> SIMD3<Float>? {
         guard
-            let joint = skeleton?.joint(for: name)
+            let joint = skeleton?.joint(name)
         else { return nil }
 
-        let jointTransform = anchorTransform * joint.transform
-        return SIMD3<Float>(jointTransform.columns.3.x,
-                            jointTransform.columns.3.y,
-                            jointTransform.columns.3.z)
+        let jointWorld = anchorTransform * joint.anchorFromJointTransform
+        return SIMD3<Float>(jointWorld.columns.3.x,
+                            jointWorld.columns.3.y,
+                            jointWorld.columns.3.z)
     }
 
     func renderFrame() {
