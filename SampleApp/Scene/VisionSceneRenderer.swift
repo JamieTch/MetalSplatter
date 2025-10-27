@@ -57,6 +57,7 @@ class VisionSceneRenderer {
         let chirality: HandAnchor.Chirality
         let pinchPosition: SIMD3<Float>?
         let palmPosition: SIMD3<Float>?
+        let orientation: simd_quatf?
         let isPinching: Bool
     }
 
@@ -73,6 +74,8 @@ class VisionSceneRenderer {
         var gestureMode: GestureMode = .idle
 
         var singleHandOffset: SIMD3<Float>?
+        var singleHandInitialOrientation: simd_quatf?
+        var singleHandInitialRotation: simd_quatf?
         var twoHandInitialDistance: Float?
         var twoHandInitialVector: SIMD3<Float>?
         var twoHandInitialRotation: simd_quatf?
@@ -379,6 +382,8 @@ class VisionSceneRenderer {
             if pinchedHands.count == 1, let entry = pinchedHands.first?.value, let pinchPosition = entry.pinchPosition {
                 interactionState.gestureMode = .singleHandGrab(chirality: entry.chirality)
                 interactionState.singleHandOffset = interactionState.translation - pinchPosition
+                interactionState.singleHandInitialOrientation = entry.orientation
+                interactionState.singleHandInitialRotation = interactionState.rotation
             } else if pinchedHands.count >= 2 {
                 beginTwoHandGesture(with: handStates)
             }
@@ -400,6 +405,15 @@ class VisionSceneRenderer {
             }
 
             interactionState.translation = pinchPosition + offset
+
+            if
+                let initialHandOrientation = interactionState.singleHandInitialOrientation,
+                let initialModelRotation = interactionState.singleHandInitialRotation,
+                let currentHandOrientation = hand.orientation
+            {
+                let rotationDelta = currentHandOrientation * initialHandOrientation.inverse
+                interactionState.rotation = rotationDelta * initialModelRotation
+            }
         case .twoHandManipulate:
             guard
                 let left = handStates[.left], left.isPinching,
@@ -452,11 +466,15 @@ class VisionSceneRenderer {
         interactionState.twoHandInitialScale = interactionState.scale
         interactionState.gestureMode = .twoHandManipulate
         interactionState.singleHandOffset = nil
+        interactionState.singleHandInitialOrientation = nil
+        interactionState.singleHandInitialRotation = nil
     }
 
     private func resetToIdle() {
         interactionState.gestureMode = .idle
         interactionState.singleHandOffset = nil
+        interactionState.singleHandInitialOrientation = nil
+        interactionState.singleHandInitialRotation = nil
         interactionState.twoHandInitialDistance = nil
         interactionState.twoHandInitialVector = nil
         interactionState.twoHandInitialRotation = nil
@@ -474,6 +492,9 @@ class VisionSceneRenderer {
             let thumbPosition = jointPosition(.thumbTip, skeleton: skeleton, anchorTransform: anchorTransform)
             let indexPosition = jointPosition(.indexFingerTip, skeleton: skeleton, anchorTransform: anchorTransform)
             let palmPosition = jointPosition(.wrist, skeleton: skeleton, anchorTransform: anchorTransform)
+            let orientation = jointOrientation(.wrist,
+                                               skeleton: skeleton,
+                                               anchorTransform: anchorTransform)
 
             let isPinching: Bool
             let pinchPosition: SIMD3<Float>?
@@ -489,6 +510,7 @@ class VisionSceneRenderer {
             let cachedState = CachedHandState(chirality: anchor.chirality,
                                               pinchPosition: pinchPosition,
                                               palmPosition: palmPosition ?? pinchPosition,
+                                              orientation: orientation,
                                               isPinching: isPinching)
             updates[anchor.chirality] = cachedState
         }
@@ -517,6 +539,24 @@ class VisionSceneRenderer {
         return SIMD3<Float>(jointWorld.columns.3.x,
                             jointWorld.columns.3.y,
                             jointWorld.columns.3.z)
+    }
+
+    private func jointOrientation(_ name: HandSkeleton.JointName,
+                                  skeleton: HandSkeleton?,
+                                  anchorTransform: simd_float4x4) -> simd_quatf? {
+        guard
+            let joint = skeleton?.joint(name)
+        else { return nil }
+
+        let jointWorld = anchorTransform * joint.anchorFromJointTransform
+        let rotationMatrix = simd_float3x3(columns: (
+            SIMD3<Float>(jointWorld.columns.0.x, jointWorld.columns.0.y, jointWorld.columns.0.z),
+            SIMD3<Float>(jointWorld.columns.1.x, jointWorld.columns.1.y, jointWorld.columns.1.z),
+            SIMD3<Float>(jointWorld.columns.2.x, jointWorld.columns.2.y, jointWorld.columns.2.z)
+        ))
+
+        let orientation = simd_quaternion(rotationMatrix)
+        return simd_normalize(orientation)
     }
 
     func renderFrame() {
