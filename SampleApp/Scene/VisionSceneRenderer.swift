@@ -137,8 +137,14 @@ class VisionSceneRenderer {
         handUpdateTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             for await update in self.handTracking.anchorUpdates {
-                let anchor = update.anchor
-                self.cacheHandAnchors([anchor])
+                switch update.event {
+                case .added, .updated:
+                    self.cacheHandAnchors([update.anchor])
+                case .removed:
+                    self.removeCachedHandState(for: update.anchor.chirality)
+                @unknown default:
+                    break
+                }
             }
         }
     }
@@ -499,10 +505,12 @@ class VisionSceneRenderer {
         for (chirality, state) in updates {
             cachedHandStates[chirality] = state
         }
-        let missing = Set(cachedHandStates.keys).subtracting(updates.keys)
-        for chirality in missing {
-            cachedHandStates.removeValue(forKey: chirality)
-        }
+        handStateLock.unlock()
+    }
+
+    private func removeCachedHandState(for chirality: HandAnchor.Chirality) {
+        handStateLock.lock()
+        cachedHandStates.removeValue(forKey: chirality)
         handStateLock.unlock()
     }
 
