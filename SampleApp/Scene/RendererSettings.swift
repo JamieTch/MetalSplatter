@@ -13,6 +13,12 @@ final class RendererSettings: ObservableObject {
         .depth,
         .coverage
     ]
+
+    var advancedDebugModes: [SplatRenderer.DebugViewMode] {
+        SplatRenderer.DebugViewMode.allCases.filter { mode in
+            !primaryDebugModes.contains(mode)
+        }
+    }
 }
 
 extension SplatRenderer.DebugViewMode {

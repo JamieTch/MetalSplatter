@@ -59,12 +59,60 @@ struct ContentView: View {
             Spacer()
 
             // Debug view selector
-            Picker("Debug View", selection: $rendererSettings.debugViewMode) {
-                ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
-                    Text(mode.displayName).tag(mode)
+            HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
+                        Button {
+                            rendererSettings.debugViewMode = mode
+                        } label: {
+                            Text(mode.displayName)
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 12)
+                                .foregroundColor(rendererSettings.debugViewMode == mode ? .white : .primary)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(rendererSettings.debugViewMode == mode ? Color.accentColor : Color.primary.opacity(0.08))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(rendererSettings.debugViewMode == mode ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity)
+
+                Menu {
+                    ForEach(rendererSettings.advancedDebugModes, id: \.self) { mode in
+                        Button(mode.displayName) {
+                            rendererSettings.debugViewMode = mode
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(rendererSettings.advancedDebugModes.contains(rendererSettings.debugViewMode) ? rendererSettings.debugViewMode.displayName : "Advanced")
+                        Image(systemName: "chevron.down")
+                    }
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 12)
+                    .foregroundColor(.primary)
+                    .frame(minWidth: 120)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.primary.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
                 }
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal)
 
             // Read a scene file from disk
