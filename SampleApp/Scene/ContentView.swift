@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var navigationPath = NavigationPath()
 
     private func openWindow(value: ModelIdentifier) {
+        rendererSettings.activeModel = value
         navigationPath.append(value)
     }
 #elseif os(visionOS)
@@ -21,6 +22,7 @@ struct ContentView: View {
     @State var immersiveSpaceIsShown = false
 
     private func openWindow(value: ModelIdentifier) {
+        rendererSettings.activeModel = value
         Task {
             switch await openImmersiveSpace(value: value) {
             case .opened:
@@ -85,7 +87,9 @@ struct ContentView: View {
                             missingModelAlert = model
                             return
                         }
-                        openWindow(value: ModelIdentifier.gaussianSplat(url))
+                        let identifier = ModelIdentifier.gaussianSplat(url)
+                        rendererSettings.activeModel = identifier
+                        openWindow(value: identifier)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal)
@@ -100,7 +104,9 @@ struct ContentView: View {
             Spacer(minLength: 24)
 
             Button("Show Sample Box") {
-                openWindow(value: ModelIdentifier.sampleBox)
+                let identifier = ModelIdentifier.sampleBox
+                rendererSettings.activeModel = identifier
+                openWindow(value: identifier)
             }
             .padding()
             .buttonStyle(.borderedProminent)
@@ -111,6 +117,32 @@ struct ContentView: View {
             Spacer()
 
 #if os(visionOS)
+            if case .gaussianSplat = rendererSettings.activeModel {
+                switch rendererSettings.calibrationMode {
+                case .idle:
+                    Button("Calibrate") {
+                        rendererSettings.calibrationMode = .running
+                        rendererSettings.calibrationCommands.send(.start)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.bottom)
+                    .disabled(!immersiveSpaceIsShown)
+                case .running:
+                    HStack(spacing: 16) {
+                        Button("Confirm Calibration") {
+                            rendererSettings.calibrationCommands.send(.confirm)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Cancel") {
+                            rendererSettings.calibrationCommands.send(.cancel)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.bottom)
+                }
+            }
+
             Button("Dismiss Immersive Space") {
                 Task {
                     await dismissImmersiveSpace()

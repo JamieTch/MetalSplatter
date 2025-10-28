@@ -1,5 +1,6 @@
 import Metal
 import SampleBoxRenderer
+import simd
 
 extension SampleBoxRenderer: ModelRenderer {
     public func render(viewports: [ModelRendererViewportDescriptor],
@@ -12,7 +13,7 @@ extension SampleBoxRenderer: ModelRenderer {
         let remappedViewports = viewports.map { viewport -> ViewportDescriptor in
             ViewportDescriptor(viewport: viewport.viewport,
                                projectionMatrix: viewport.projectionMatrix,
-                               viewMatrix: viewport.viewMatrix,
+                               viewMatrix: simd_mul(viewport.viewMatrix, viewport.modelMatrix),
                                screenSize: viewport.screenSize)
         }
         try render(viewports: remappedViewports,
