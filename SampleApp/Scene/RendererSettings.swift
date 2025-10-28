@@ -64,6 +64,10 @@ extension SplatRenderer.DebugViewMode {
             return "Normal Δ"
         case .normalDotComparison:
             return "N·V Compare"
+        case .sphericalHarmonicsDiffuse:
+            return "SH Diffuse"
+        case .sphericalHarmonicsSpecular:
+            return "SH Specular"
         }
     }
 }

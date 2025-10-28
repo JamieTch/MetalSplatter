@@ -62,6 +62,8 @@ public class SplatRenderer {
         case normalRaw = 25
         case normalDifference = 26
         case normalDotComparison = 27
+        case sphericalHarmonicsDiffuse = 28
+        case sphericalHarmonicsSpecular = 29
     }
 
     public enum Error: Swift.Error, LocalizedError {

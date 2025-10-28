@@ -25,6 +25,8 @@ float3 evaluateSplatSHForSpecular(SplatSHCoefficients coefficients,
                                   ushort coefficientCount,
                                   float3 reflectionDirection);
 
+float3 safeNormalize(float3 value, float3 fallback);
+
 half3 shadeGaussian(half3 albedo,
                     half metallic,
                     half roughness,
