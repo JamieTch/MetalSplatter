@@ -342,54 +342,34 @@ if (DEBUG_VIEW_VALUE == 1) {
         return half4(l.x, l.y, 0, 1);
     } else if (DEBUG_VIEW_VALUE == 7) {
         // Shaded result (uses environment)
-        half3 shaded = shadeGaussian(albedo,
-                                     metallic,
-                                     roughness,
-                                     normal_dec,
-                                     viewDir,
-                                     ao,
-                                     environmentMap,
-                                     brdfLUT,
-                                     environmentSampler,
-                                     brdfSampler);
+        half3 shaded = shadeGaussian(
+            albedo,
+            metallic,
+            roughness,
+            shadingNormal,
+            shadingView,
+            shadingReflection,
+            ao,
+            diffuseSH,
+            specularSH,
+            environmentMap,
+            brdfLUT,
+            environmentSampler,
+            brdfSampler
+        );
         return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+    } else if (DEBUG_VIEW_VALUE == 28) {
+        // Diffuse spherical harmonics contribution only (accumulated)
+        half3 sh = half3(diffuseSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
+    } else if (DEBUG_VIEW_VALUE == 29) {
+        // Specular spherical harmonics contribution only (accumulated)
+        half3 sh = half3(specularSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
     } else {
         // Coverage and depth handled in postprocess
         return half4(0);
     }
-// UI-driven debug modes (function constant)
-// 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
-
-if (DEBUG_VIEW_VALUE == 28) {
-    // Diffuse spherical harmonics contribution only (accumulated)
-    half3 sh = half3(diffuseSH) * accumulatedAlpha;
-    return half4(sh, accumulatedAlpha);
-} else if (DEBUG_VIEW_VALUE == 29) {
-    // Specular spherical harmonics contribution only (accumulated)
-    half3 sh = half3(specularSH) * accumulatedAlpha;
-    return half4(sh, accumulatedAlpha);
-} else if (DEBUG_VIEW_VALUE == 7) {
-    // Shaded result (uses environment)
-    half3 shaded = shadeGaussian(
-        albedo,
-        metallic,
-        roughness,
-        shadingNormal,
-        shadingView,
-        shadingReflection,
-        ao,
-        diffuseSH,
-        specularSH,
-        environmentMap,
-        brdfLUT,
-        environmentSampler,
-        brdfSampler
-    );
-    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-} else {
-    // Coverage and depth handled in postprocess
-    return half4(0);
-}
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
                                                texturecube<half> environmentMap [[texture(0)]],
