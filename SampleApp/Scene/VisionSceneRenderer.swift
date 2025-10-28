@@ -114,10 +114,18 @@ class VisionSceneRenderer {
     private var didAutoCapture: Bool = false
     private var captureNextFrame: Bool = false
     private var lastBrightnessProbeFrame: UInt64 = 0
-    private var rendererSettingsCancellable: AnyCancellable?
+    private var rendererSettingsCancellables: Set<AnyCancellable> = []
     private var debugViewModeStorage: SplatRenderer.DebugViewMode = .albedo
     private let debugViewModeLock = NSLock()
     private var debugViewModeNeedsApply = false
+    private weak var rendererSettings: RendererSettings?
+    private let calibrationStore = CalibrationStore()
+    private var pendingCalibrationCommands: [RendererSettings.CalibrationCommand] = []
+    private let calibrationCommandLock = NSLock()
+    private var isCalibrating = false
+    private var calibrationSnapshot: ModelInteractionState?
+    private var lastDeviceAnchorTransform: simd_float4x4?
+    private let calibrationAnchorRenderer: CalibrationAnchorRenderer?
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -139,6 +147,10 @@ class VisionSceneRenderer {
             environmentPrefilter = nil
         }
 
+        calibrationAnchorRenderer = try? CalibrationAnchorRenderer(device: device,
+                                                                   colorFormat: layerRenderer.configuration.colorFormat,
+                                                                   depthFormat: layerRenderer.configuration.depthFormat)
+
         handUpdateTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             for await update in self.handTracking.anchorUpdates {
@@ -159,6 +171,22 @@ class VisionSceneRenderer {
         self.model = model
 
         interactionState = ModelInteractionState()
+        calibrationSnapshot = nil
+        isCalibrating = false
+        lastDeviceAnchorTransform = nil
+        calibrationCommandLock.lock()
+        pendingCalibrationCommands.removeAll()
+        calibrationCommandLock.unlock()
+        notifyCalibrationMode(.idle)
+
+        if let model,
+           case .gaussianSplat = model,
+           let key = calibrationKey(for: model),
+           let calibration = calibrationStore.loadCalibration(forKey: key) {
+            interactionState.translation = calibration.translation
+            interactionState.rotation = calibration.rotation
+            interactionState.scale = calibration.scale
+        }
 
         if let splat = modelRenderer as? SplatRenderer {
             try? splat.setEnvironmentMap(nil)
@@ -218,6 +246,7 @@ class VisionSceneRenderer {
         // happens to be a useful default for the most common datasets at the moment.
         let commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(0, 0, 1))
 
+        let modelMatrix = translationMatrix * rotationMatrix * scaleMatrix * commonUpCalibration
         let simdDeviceAnchor = deviceAnchor?.originFromAnchorTransform ?? matrix_identity_float4x4
 
         return drawable.views.enumerated().map { (i, view) in
@@ -252,7 +281,8 @@ class VisionSceneRenderer {
             }
             return ModelRendererViewportDescriptor(viewport: view.textureMap.viewport,
                                                    projectionMatrix: projMatrixSIMD,
-                                                   viewMatrix: userViewpointMatrix * translationMatrix * rotationMatrix * scaleMatrix * commonUpCalibration,
+                                                   viewMatrix: userViewpointMatrix,
+                                                   modelMatrix: modelMatrix,
                                                    screenSize: screenSize)
         }
     }
@@ -570,12 +600,14 @@ class VisionSceneRenderer {
         let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: time)
 
         drawable.deviceAnchor = deviceAnchor
+        lastDeviceAnchorTransform = deviceAnchor?.originFromAnchorTransform
 
         let semaphore = inFlightSemaphore
         commandBuffer.addCompletedHandler { (_ commandBuffer)-> Swift.Void in
             semaphore.signal()
         }
 
+        processCalibrationCommandsIfNeeded()
         updateInteractionState()
         updateEnvironmentProbeIfNeeded()
         applyEnvironmentResourcesIfNeeded()
@@ -597,6 +629,16 @@ class VisionSceneRenderer {
             let colorFormatStr = String(describing: cfg.colorFormat)
             let depthFormatStr = String(describing: cfg.depthFormat)
             Self.log.error("Unable to render scene: \(error.localizedDescription). colorFormat=\(colorFormatStr) depthFormat=\(depthFormatStr) views=\(drawable.views.count) frame=\(self.frameCounter)")
+        }
+
+        if isCalibrating,
+           case .gaussianSplat = model,
+           let anchorRenderer = calibrationAnchorRenderer,
+           let colorTexture = drawable.colorTextures.first {
+            anchorRenderer.render(viewports: viewports,
+                                  colorTexture: colorTexture,
+                                  depthTexture: drawable.depthTextures.first,
+                                  commandBuffer: commandBuffer)
         }
 
         if let splatRenderer = modelRenderer as? SplatRenderer {
@@ -630,11 +672,23 @@ class VisionSceneRenderer {
     }
 
     func bindRendererSettings(_ settings: RendererSettings) {
+        rendererSettings = settings
         debugViewMode = settings.debugViewMode
-        rendererSettingsCancellable = settings.$debugViewMode
+        rendererSettingsCancellables.removeAll()
+
+        settings.$debugViewMode
             .sink { [weak self] mode in
                 self?.debugViewMode = mode
             }
+            .store(in: &rendererSettingsCancellables)
+
+        settings.calibrationCommands
+            .sink { [weak self] command in
+                self?.enqueueCalibrationCommand(command)
+            }
+            .store(in: &rendererSettingsCancellables)
+
+        notifyCalibrationMode(isCalibrating ? .running : .idle)
     }
 
     private var debugViewMode: SplatRenderer.DebugViewMode {
@@ -667,6 +721,81 @@ class VisionSceneRenderer {
 
         guard let mode, let splat = modelRenderer as? SplatRenderer else { return }
         splat.debugViewMode = mode
+    }
+
+    private func enqueueCalibrationCommand(_ command: RendererSettings.CalibrationCommand) {
+        calibrationCommandLock.lock()
+        pendingCalibrationCommands.append(command)
+        calibrationCommandLock.unlock()
+    }
+
+    private func processCalibrationCommandsIfNeeded() {
+        calibrationCommandLock.lock()
+        let commands = pendingCalibrationCommands
+        pendingCalibrationCommands.removeAll()
+        calibrationCommandLock.unlock()
+
+        guard !commands.isEmpty else { return }
+
+        for command in commands {
+            switch command {
+            case .start:
+                guard case .gaussianSplat = model, !isCalibrating else { continue }
+                calibrationSnapshot = interactionState
+                isCalibrating = true
+                notifyCalibrationMode(.running)
+            case .confirm:
+                guard isCalibrating else { continue }
+                if let model,
+                   case .gaussianSplat = model,
+                   let key = calibrationKey(for: model) {
+                    let anchorMetadata = lastDeviceAnchorTransform.map { ModelCalibration.AnchorMetadata(transform: $0) }
+                    let calibration = ModelCalibration(translation: interactionState.translation,
+                                                       rotation: interactionState.rotation,
+                                                       scale: interactionState.scale,
+                                                       anchor: anchorMetadata)
+                    do {
+                        try calibrationStore.saveCalibration(calibration, forKey: key)
+                    } catch {
+                        Self.log.error("Failed to save calibration for \(key): \(error.localizedDescription)")
+                    }
+                }
+                isCalibrating = false
+                calibrationSnapshot = nil
+                notifyCalibrationMode(.idle)
+            case .cancel:
+                guard isCalibrating else { continue }
+                if let snapshot = calibrationSnapshot {
+                    interactionState = snapshot
+                }
+                isCalibrating = false
+                calibrationSnapshot = nil
+                notifyCalibrationMode(.idle)
+            }
+        }
+    }
+
+    private func notifyCalibrationMode(_ mode: RendererSettings.CalibrationMode) {
+        guard let settings = rendererSettings else { return }
+        DispatchQueue.main.async {
+            settings.calibrationMode = mode
+        }
+    }
+
+    private func calibrationKey(for model: ModelIdentifier) -> String? {
+        switch model {
+        case .gaussianSplat(let url):
+            let baseName = url.deletingPathExtension().lastPathComponent
+            let canonicalPath = url.standardizedFileURL.absoluteString
+            var hash: UInt64 = 5381
+            for byte in canonicalPath.utf8 {
+                hash = ((hash << 5) &+ hash) &+ UInt64(byte)
+            }
+            let suffix = String(format: "%016llx", hash)
+            return "\(baseName)-\(suffix)"
+        case .sampleBox:
+            return nil
+        }
     }
 
     private func updateEnvironmentProbeIfNeeded() {

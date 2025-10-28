@@ -97,20 +97,22 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
 
         let viewport = MTLViewport(originX: 0, originY: 0, width: drawableSize.width, height: drawableSize.height, znear: 0, zfar: 1)
 
+        let modelMatrix = translationMatrix * rotationMatrix * commonUpCalibration
         let viewMatrix: simd_float4x4
 #if os(macOS)
         if let camera = cameraController {
-            viewMatrix = camera.viewMatrix * commonUpCalibration
+            viewMatrix = camera.viewMatrix
         } else {
-            viewMatrix = translationMatrix * rotationMatrix * commonUpCalibration
+            viewMatrix = matrix_identity_float4x4
         }
 #else
-        viewMatrix = translationMatrix * rotationMatrix * commonUpCalibration
+        viewMatrix = matrix_identity_float4x4
 #endif
 
         return ModelRendererViewportDescriptor(viewport: viewport,
                                                projectionMatrix: projectionMatrix,
                                                viewMatrix: viewMatrix,
+                                               modelMatrix: modelMatrix,
                                                screenSize: SIMD2(x: Int(drawableSize.width), y: Int(drawableSize.height)))
     }
 

@@ -6,6 +6,7 @@ public struct ModelRendererViewportDescriptor {
     var viewport: MTLViewport
     var projectionMatrix: simd_float4x4
     var viewMatrix: simd_float4x4
+    var modelMatrix: simd_float4x4
     var screenSize: SIMD2<Int>
 }
 

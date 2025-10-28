@@ -12,7 +12,7 @@ extension SampleBoxRenderer: ModelRenderer {
         let remappedViewports = viewports.map { viewport -> ViewportDescriptor in
             ViewportDescriptor(viewport: viewport.viewport,
                                projectionMatrix: viewport.projectionMatrix,
-                               viewMatrix: viewport.viewMatrix,
+                               viewMatrix: viewport.viewMatrix * viewport.modelMatrix,
                                screenSize: viewport.screenSize)
         }
         try render(viewports: remappedViewports,
