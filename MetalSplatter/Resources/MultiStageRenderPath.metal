@@ -364,6 +364,7 @@ if (DEBUG_VIEW_VALUE == 1) {
     // Coverage and depth handled in postprocess
     return half4(0);
 }
+} // <-- Missing brace added here to close resolveFragmentValues
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
                                                texturecube<half> environmentMap [[texture(0)]],
