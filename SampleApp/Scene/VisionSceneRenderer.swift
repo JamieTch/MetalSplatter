@@ -114,10 +114,29 @@ class VisionSceneRenderer {
     private var didAutoCapture: Bool = false
     private var captureNextFrame: Bool = false
     private var lastBrightnessProbeFrame: UInt64 = 0
-    private var rendererSettingsCancellable: AnyCancellable?
+    private var rendererSettingsCancellables: Set<AnyCancellable> = []
     private var debugViewModeStorage: SplatRenderer.DebugViewMode = .albedo
     private let debugViewModeLock = NSLock()
     private var debugViewModeNeedsApply = false
+    private var sphericalHarmonicsEnabledStorage = true
+    private let sphericalHarmonicsEnabledLock = NSLock()
+    private var sphericalHarmonicsNeedsApply = false
+    private var sphericalHarmonicsEnabled: Bool {
+        get {
+            sphericalHarmonicsEnabledLock.lock()
+            defer { sphericalHarmonicsEnabledLock.unlock() }
+            return sphericalHarmonicsEnabledStorage
+        }
+        set {
+            sphericalHarmonicsEnabledLock.lock()
+            let didChange = sphericalHarmonicsEnabledStorage != newValue
+            sphericalHarmonicsEnabledStorage = newValue
+            if didChange {
+                sphericalHarmonicsNeedsApply = true
+            }
+            sphericalHarmonicsEnabledLock.unlock()
+        }
+    }
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -176,6 +195,10 @@ class VisionSceneRenderer {
             try await splat.read(from: url)
             splat.debugViewMode = debugViewMode
             modelRenderer = splat
+            sphericalHarmonicsEnabledLock.lock()
+            sphericalHarmonicsNeedsApply = true
+            sphericalHarmonicsEnabledLock.unlock()
+            applySphericalHarmonicsModeIfNeeded()
             if environmentPrefilterResult != nil {
                 environmentResourcesDirty = true
                 lastAppliedEnvironmentRevision = 0
@@ -623,6 +646,7 @@ class VisionSceneRenderer {
             } else {
                 autoreleasepool {
                     self.applyDebugViewModeIfNeeded()
+                    self.applySphericalHarmonicsModeIfNeeded()
                     self.renderFrame()
                 }
             }
@@ -631,10 +655,21 @@ class VisionSceneRenderer {
 
     func bindRendererSettings(_ settings: RendererSettings) {
         debugViewMode = settings.debugViewMode
-        rendererSettingsCancellable = settings.$debugViewMode
+        sphericalHarmonicsEnabled = settings.sphericalHarmonicsEnabled
+
+        rendererSettingsCancellables.removeAll()
+
+        settings.$debugViewMode
             .sink { [weak self] mode in
                 self?.debugViewMode = mode
             }
+            .store(in: &rendererSettingsCancellables)
+
+        settings.$sphericalHarmonicsEnabled
+            .sink { [weak self] isEnabled in
+                self?.sphericalHarmonicsEnabled = isEnabled
+            }
+            .store(in: &rendererSettingsCancellables)
     }
 
     private var debugViewMode: SplatRenderer.DebugViewMode {
@@ -667,6 +702,37 @@ class VisionSceneRenderer {
 
         guard let mode, let splat = modelRenderer as? SplatRenderer else { return }
         splat.debugViewMode = mode
+    }
+
+    private func applySphericalHarmonicsModeIfNeeded() {
+        let isEnabled: Bool?
+        sphericalHarmonicsEnabledLock.lock()
+        if sphericalHarmonicsNeedsApply {
+            sphericalHarmonicsNeedsApply = false
+            isEnabled = sphericalHarmonicsEnabledStorage
+        } else {
+            isEnabled = nil
+        }
+        sphericalHarmonicsEnabledLock.unlock()
+
+        guard let isEnabled else { return }
+
+        guard let splat = modelRenderer as? SplatRenderer else {
+            sphericalHarmonicsEnabledLock.lock()
+            if !sphericalHarmonicsNeedsApply {
+                sphericalHarmonicsNeedsApply = true
+            }
+            sphericalHarmonicsEnabledLock.unlock()
+            return
+        }
+
+        if isEnabled {
+            splat.gaussianImageRepresentationMetadata =
+                GaussianImageRepresentationMetadata(sphericalHarmonicsUsage: .all)
+        } else {
+            splat.gaussianImageRepresentationMetadata =
+                GaussianImageRepresentationMetadata(sphericalHarmonicsUsage: [])
+        }
     }
 
     private func updateEnvironmentProbeIfNeeded() {

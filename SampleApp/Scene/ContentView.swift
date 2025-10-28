@@ -115,6 +115,13 @@ struct ContentView: View {
             }
             .padding(.horizontal)
 
+            Picker("Lighting Mode", selection: $rendererSettings.sphericalHarmonicsEnabled) {
+                Text("SH + Env").tag(true)
+                Text("Env Only").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
             // Read a scene file from disk
             Button("Read Scene File") {
                 isPickingFile = true
