@@ -7,27 +7,51 @@ import XCTest
 import SplatIO
 
 final class SplatRendererPackingTests: XCTestCase {
+    private func expectedGIRNormal(rotation: simd_quatf, scale: SIMD3<Float>) -> SIMD3<Float> {
+        let rotationMatrix = simd_float3x3(rotation)
+        let scaleComponents = [scale.x, scale.y, scale.z]
+        var smallestIndex = 0
+        var smallestValue = scaleComponents[0]
+        for index in 1..<scaleComponents.count {
+            if scaleComponents[index] < smallestValue {
+                smallestIndex = index
+                smallestValue = scaleComponents[index]
+            }
+        }
+
+        var column = rotationMatrix[smallestIndex]
+        let length = simd_length(column)
+        if length > .leastNonzeroMagnitude, length.isFinite {
+            column /= length
+        }
+        return column
+    }
+
     func testSplatPacksMaterialProperties() {
+        let rotation = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 0, 1))
+        let scale = SIMD3<Float>(0.25, 1.0, 0.5)
         let point = SplatScenePoint(position: SIMD3<Float>(1, 2, 3),
                                     color: .linearFloat(SIMD3<Float>(0.25, 0.5, 0.75)),
                                     opacity: .linearFloat(0.8),
-                                    scale: .linearFloat(SIMD3<Float>(repeating: 1)),
-                                    rotation: simd_quatf(angle: 0, axis: SIMD3<Float>(0, 0, 1)),
+                                    scale: .linearFloat(scale),
+                                    rotation: rotation,
                                     albedo: SIMD3<Float>(0.2, 0.4, 0.6),
                                     metallic: 0.3,
                                     roughness: 0.7,
-                                    normal: SIMD3<Float>(0, 1, 0))
+                                    normal: SIMD3<Float>(0, 0, 1))
 
         let splat = SplatRenderer.Splat(point, index: 0)
+
+        let expectedNormal = expectedGIRNormal(rotation: rotation, scale: scale)
 
         XCTAssertEqual(Float(splat.albedo.x), 0.2, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.albedo.y), 0.4, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.albedo.z), 0.6, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.metallic), 0.3, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.roughness), 0.7, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.x), 0, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.y), 1, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.z), 0, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.x), expectedNormal.x, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.y), expectedNormal.y, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.z), expectedNormal.z, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.a), 0.8, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.rotation.x), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.rotation.y), 0, accuracy: 1e-3)
@@ -48,14 +72,16 @@ final class SplatRendererPackingTests: XCTestCase {
 
         let splat = SplatRenderer.Splat(point, index: 5)
 
+        let expectedNormal = expectedGIRNormal(rotation: point.rotation, scale: point.scale.asLinearFloat)
+
         XCTAssertEqual(Float(splat.albedo.x), SplatScenePoint.defaultAlbedo.x, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.albedo.y), SplatScenePoint.defaultAlbedo.y, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.albedo.z), SplatScenePoint.defaultAlbedo.z, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.metallic), SplatScenePoint.defaultMetallic, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.roughness), SplatScenePoint.defaultRoughness, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.x), SplatScenePoint.defaultNormal.x, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.y), SplatScenePoint.defaultNormal.y, accuracy: 1e-3)
-        XCTAssertEqual(Float(splat.normal.z), SplatScenePoint.defaultNormal.z, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.x), expectedNormal.x, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.y), expectedNormal.y, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.z), expectedNormal.z, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.x), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.y), 0, accuracy: 1e-3)
         XCTAssertEqual(Float(splat.color.z), 0, accuracy: 1e-3)

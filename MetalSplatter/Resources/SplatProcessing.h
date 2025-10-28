@@ -18,6 +18,8 @@ half splatFragmentAlpha(half2 relativePosition, half splatAlpha);
 
 half computeAmbientOcclusion(half opacity);
 
+float3 safeNormalize(float3 value, float3 fallback);
+
 float3 evaluateSplatSHForDiffuse(SplatSHCoefficients coefficients,
                                  ushort coefficientCount,
                                  float3 normal);

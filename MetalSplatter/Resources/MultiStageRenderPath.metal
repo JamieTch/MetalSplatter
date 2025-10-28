@@ -246,52 +246,43 @@ inline half4 resolveFragmentValues(FragmentValues fragmentValues,
     half3 normal_raw = normalize(normal);
     half3 normal_dec = decodeNormal(normal);
 
-// assumes you already defined:
-// constant uint DEBUG_VIEW [[function_constant(0)]];
-// constant bool _DEBUG_VIEW_IS_SET = is_function_constant_defined(DEBUG_VIEW);
-// constant uint DEBUG_VIEW_VALUE = _DEBUG_VIEW_IS_SET ? DEBUG_VIEW : 1;
+    float3 shadingNormal     = safeNormalize(float3(normal_dec), float3(0, 0, 1));
+    float3 shadingView       = safeNormalize(float3(viewDir),    float3(0, 0, 1));
+    float3 shadingReflection = reflect(-shadingView, shadingNormal);
 
-float3 shadingNormal     = safeNormalize(float3(normal_dec), float3(0, 0, 1));
-float3 shadingView       = safeNormalize(float3(viewDir),    float3(0, 0, 1));
-float3 shadingReflection = reflect(-shadingView, shadingNormal);
-
-// Debug outputs (early returns). If none matches, continue with regular shading below.
-if (DEBUG_VIEW_VALUE == 1) {
-    // Albedo
-    return half4(albedo, 1);
-} else if (DEBUG_VIEW_VALUE == 2) {
-    // Normal (visualized as 0..1)
-    return half4(normalize(normal) * 0.5h + 0.5h, 1);
-} else if (DEBUG_VIEW_VALUE == 3) {
-    // Roughness
-    return half4(roughness, roughness, roughness, 1);
-} else if (DEBUG_VIEW_VALUE == 4) {
-    // Metallic
-    return half4(metallic, metallic, metallic, 1);
-} else if (DEBUG_VIEW_VALUE == 5) {
-    // Ambient occlusion
-    return half4(ao, ao, ao, 1);
-} else if (DEBUG_VIEW_VALUE == 21) {
-    // Albedo after sRGB->linear (diagnostic)
-    return half4(srgbToLinear(albedo), 1);
-} else if (DEBUG_VIEW_VALUE == 22) {
-    // Roughness (duplicate of 3 for sweep)
-    return half4(roughness, roughness, roughness, 1);
-} else if (DEBUG_VIEW_VALUE == 23) {
-    // Metallic (duplicate of 4 for sweep)
-    return half4(metallic, metallic, metallic, 1);
-} else if (DEBUG_VIEW_VALUE == 24) {
-    // Normal (duplicate of 2 for sweep)
-    return half4(normal_dec * 0.5h + 0.5h, 1);
-} else if (DEBUG_VIEW_VALUE == 25) {
-    // Raw (pre-decode) normal visualization
-    return half4(normal_raw * 0.5h + 0.5h, 1);
-}
-
-// NOTE: case 26 (“difference heatmap”) was omitted here because its body
-// wasn't present in your snippet. Add it later if needed.
-
-// If we get here, proceed with your regular PBR/SH shading…
+    // Debug outputs (early returns). If none matches, continue with regular shading below.
+    if (DEBUG_VIEW_VALUE == 1) {
+        // Albedo
+        return half4(albedo, 1);
+    } else if (DEBUG_VIEW_VALUE == 2) {
+        // Normal (visualized as 0..1)
+        return half4(normalize(normal) * 0.5h + 0.5h, 1);
+    } else if (DEBUG_VIEW_VALUE == 3) {
+        // Roughness
+        return half4(roughness, roughness, roughness, 1);
+    } else if (DEBUG_VIEW_VALUE == 4) {
+        // Metallic
+        return half4(metallic, metallic, metallic, 1);
+    } else if (DEBUG_VIEW_VALUE == 5) {
+        // Ambient occlusion
+        return half4(ao, ao, ao, 1);
+    } else if (DEBUG_VIEW_VALUE == 21) {
+        // Albedo after sRGB->linear (diagnostic)
+        return half4(srgbToLinear(albedo), 1);
+    } else if (DEBUG_VIEW_VALUE == 22) {
+        // Roughness (duplicate of 3 for sweep)
+        return half4(roughness, roughness, roughness, 1);
+    } else if (DEBUG_VIEW_VALUE == 23) {
+        // Metallic (duplicate of 4 for sweep)
+        return half4(metallic, metallic, metallic, 1);
+    } else if (DEBUG_VIEW_VALUE == 24) {
+        // Normal (duplicate of 2 for sweep)
+        return half4(normal_dec * 0.5h + 0.5h, 1);
+    } else if (DEBUG_VIEW_VALUE == 25) {
+        // Raw (pre-decode) normal visualization
+        return half4(normal_raw * 0.5h + 0.5h, 1);
+    } else if (DEBUG_VIEW_VALUE == 26) {
+        // Difference heatmap between decoded and raw normals
         half3 diff = abs(normal_dec - normal_raw);
         return half4(diff, 1);
     } else if (DEBUG_VIEW_VALUE == 27) {
@@ -340,56 +331,42 @@ if (DEBUG_VIEW_VALUE == 1) {
         // BRDF LUT debug: show LUT sample at center to validate BRDF binding
         half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
         return half4(l.x, l.y, 0, 1);
+    }
+
+    // UI-driven debug modes (function constant)
+    // 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
+    if (DEBUG_VIEW_VALUE == 28) {
+        // Diffuse spherical harmonics contribution only (accumulated)
+        half3 sh = half3(diffuseSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
+    } else if (DEBUG_VIEW_VALUE == 29) {
+        // Specular spherical harmonics contribution only (accumulated)
+        half3 sh = half3(specularSH) * accumulatedAlpha;
+        return half4(sh, accumulatedAlpha);
     } else if (DEBUG_VIEW_VALUE == 7) {
         // Shaded result (uses environment)
-        half3 shaded = shadeGaussian(albedo,
-                                     metallic,
-                                     roughness,
-                                     normal_dec,
-                                     viewDir,
-                                     ao,
-                                     environmentMap,
-                                     brdfLUT,
-                                     environmentSampler,
-                                     brdfSampler);
+        half3 shaded = shadeGaussian(
+            albedo,
+            metallic,
+            roughness,
+            shadingNormal,
+            shadingView,
+            shadingReflection,
+            ao,
+            diffuseSH,
+            specularSH,
+            environmentMap,
+            brdfLUT,
+            environmentSampler,
+            brdfSampler
+        );
         return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-    } else {
-        // Coverage and depth handled in postprocess
-        return half4(0);
     }
-// UI-driven debug modes (function constant)
-// 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
 
-if (DEBUG_VIEW_VALUE == 28) {
-    // Diffuse spherical harmonics contribution only (accumulated)
-    half3 sh = half3(diffuseSH) * accumulatedAlpha;
-    return half4(sh, accumulatedAlpha);
-} else if (DEBUG_VIEW_VALUE == 29) {
-    // Specular spherical harmonics contribution only (accumulated)
-    half3 sh = half3(specularSH) * accumulatedAlpha;
-    return half4(sh, accumulatedAlpha);
-} else if (DEBUG_VIEW_VALUE == 7) {
-    // Shaded result (uses environment)
-    half3 shaded = shadeGaussian(
-        albedo,
-        metallic,
-        roughness,
-        shadingNormal,
-        shadingView,
-        shadingReflection,
-        ao,
-        diffuseSH,
-        specularSH,
-        environmentMap,
-        brdfLUT,
-        environmentSampler,
-        brdfSampler
-    );
-    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-} else {
     // Coverage and depth handled in postprocess
     return half4(0);
 }
+
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
                                                texturecube<half> environmentMap [[texture(0)]],
