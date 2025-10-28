@@ -9,6 +9,8 @@ float3 calcCovariance2D(float3 viewPos,
 
 void decomposeCovariance(float3 cov2D, thread float2 &v1, thread float2 &v2);
 
+float3 safeNormalize(float3 value, float3 fallback);
+
 FragmentIn splatVertex(Splat splat,
                        Uniforms uniforms,
                        uint relativeVertexIndex,
