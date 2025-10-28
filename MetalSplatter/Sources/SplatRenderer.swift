@@ -117,6 +117,22 @@ public class SplatRenderer {
         )
     }
 
+    private static func sanitizeScale(_ scale: SIMD3<Float>, pointIndex: Int) -> SIMD3<Float> {
+        var sanitized = sanitizeVector(scale,
+                                       defaultValue: SIMD3<Float>(repeating: 1),
+                                       field: "scale",
+                                       pointIndex: pointIndex)
+
+        for component in 0..<3 {
+            if sanitized[component] <= .leastNonzeroMagnitude {
+                log.error("Invalid scale component for splat index \(pointIndex, privacy: .public); using default value")
+                sanitized[component] = 1
+            }
+        }
+
+        return sanitized
+    }
+
     private static func sanitizeSphericalHarmonics(_ coefficients: [SIMD3<Float>],
                                                     pointIndex: Int) -> [SIMD3<Float>] {
         coefficients.enumerated().map { index, coefficient in
@@ -187,6 +203,31 @@ public class SplatRenderer {
                     y: Float16(vector.y),
                     z: Float16(vector.z),
                     w: Float16(vector.w))
+    }
+
+    private static func reconstructNormal(rotationMatrix: simd_float3x3,
+                                          scale: SIMD3<Float>,
+                                          fallbackNormal: SIMD3<Float>,
+                                          pointIndex: Int) -> SIMD3<Float> {
+        let scaleComponents = [scale.x, scale.y, scale.z]
+        var smallestIndex = 0
+        var smallestValue = scaleComponents[0]
+        for componentIndex in 1..<scaleComponents.count {
+            if scaleComponents[componentIndex] < smallestValue {
+                smallestIndex = componentIndex
+                smallestValue = scaleComponents[componentIndex]
+            }
+        }
+
+        var reconstructed = rotationMatrix[smallestIndex]
+        let length = simd_length(reconstructed)
+        guard length.isFinite, length > .leastNonzeroMagnitude else {
+            log.error("Failed to reconstruct normal for splat index \(pointIndex, privacy: .public); using serialized value")
+            return fallbackNormal
+        }
+
+        reconstructed /= length
+        return reconstructed
     }
 
     private static func makeFallbackEnvironmentMap(device: MTLDevice) -> MTLTexture {
@@ -1319,7 +1360,9 @@ extension SplatRenderer.Splat {
          normal: SIMD3<Float>,
          pointIndex: Int) {
         let sanitizedRotation = SplatRenderer.sanitizeQuaternion(rotation, pointIndex: pointIndex)
-        let transform = simd_float3x3(sanitizedRotation) * simd_float3x3(diagonal: scale)
+        let sanitizedScale = SplatRenderer.sanitizeScale(scale, pointIndex: pointIndex)
+        let rotationMatrix = simd_float3x3(sanitizedRotation)
+        let transform = rotationMatrix * simd_float3x3(diagonal: sanitizedScale)
         let cov3D = transform * transform.transpose
 
         let sanitizedColor = SplatRenderer.sanitizeColor(color, pointIndex: pointIndex)
@@ -1332,7 +1375,11 @@ extension SplatRenderer.Splat {
                                                                   defaultValue: SplatScenePoint.defaultRoughness,
                                                                   field: "roughness",
                                                                   pointIndex: pointIndex)
-        let sanitizedNormal = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
+        let serializedNormal = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
+        let reconstructedNormal = SplatRenderer.reconstructNormal(rotationMatrix: rotationMatrix,
+                                                                  scale: sanitizedScale,
+                                                                  fallbackNormal: serializedNormal,
+                                                                  pointIndex: pointIndex)
 
         let covA = SIMD3<Float>(cov3D[0, 0], cov3D[0, 1], cov3D[0, 2])
         let covB = SIMD3<Float>(cov3D[1, 1], cov3D[1, 2], cov3D[2, 2])
@@ -1355,7 +1402,7 @@ extension SplatRenderer.Splat {
         self.albedo = SplatRenderer.packHalf3(sanitizedAlbedo)
         self.metallic = Float16(sanitizedMetallic)
         self.roughness = Float16(sanitizedRoughness)
-        self.normal = SplatRenderer.packHalf3(sanitizedNormal)
+        self.normal = SplatRenderer.packHalf3(reconstructedNormal)
         self.rotation = SplatRenderer.packHalf4(sanitizedRotation.vector)
     }
 }
