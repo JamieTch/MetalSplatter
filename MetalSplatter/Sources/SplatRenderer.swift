@@ -166,16 +166,18 @@ public class SplatRenderer {
         return simd_clamp(sanitized, SIMD3<Float>(repeating: 0), SIMD3<Float>(repeating: 1))
     }
 
-    private static func sanitizeNormal(_ normal: SIMD3<Float>, pointIndex: Int) -> SIMD3<Float> {
-        var sanitized = sanitizeVector(normal, defaultValue: SplatScenePoint.defaultNormal, field: "normal", pointIndex: pointIndex)
-        let length = simd_length(sanitized)
-        if length > .leastNonzeroMagnitude && length.isFinite {
-            sanitized /= length
-        } else {
+    private static func sanitizeNormal(_ normal: SIMD3<Float>, pointIndex: Int) -> (normal: SIMD3<Float>, isFallback: Bool) {
+        let length = simd_length(normal)
+        guard normal.x.isFinite,
+              normal.y.isFinite,
+              normal.z.isFinite,
+              length.isFinite,
+              length > .leastNonzeroMagnitude else {
             log.error("Invalid normal for splat index \(pointIndex, privacy: .public); falling back to default")
-            sanitized = SplatScenePoint.defaultNormal
+            return (SplatScenePoint.defaultNormal, true)
         }
-        return sanitized
+
+        return (normal / length, false)
     }
 
     private static func sanitizeQuaternion(_ quaternion: simd_quatf, pointIndex: Int) -> simd_quatf {
@@ -1375,11 +1377,11 @@ extension SplatRenderer.Splat {
                                                                   defaultValue: SplatScenePoint.defaultRoughness,
                                                                   field: "roughness",
                                                                   pointIndex: pointIndex)
-        let serializedNormal = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
-        let reconstructedNormal = SplatRenderer.reconstructNormal(rotationMatrix: rotationMatrix,
-                                                                  scale: sanitizedScale,
-                                                                  fallbackNormal: serializedNormal,
-                                                                  pointIndex: pointIndex)
+        let (sanitizedNormal, normalIsFallback) = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
+        let finalNormal = normalIsFallback ? SplatRenderer.reconstructNormal(rotationMatrix: rotationMatrix,
+                                                                             scale: sanitizedScale,
+                                                                             fallbackNormal: sanitizedNormal,
+                                                                             pointIndex: pointIndex) : sanitizedNormal
 
         let covA = SIMD3<Float>(cov3D[0, 0], cov3D[0, 1], cov3D[0, 2])
         let covB = SIMD3<Float>(cov3D[1, 1], cov3D[1, 2], cov3D[2, 2])
@@ -1402,7 +1404,7 @@ extension SplatRenderer.Splat {
         self.albedo = SplatRenderer.packHalf3(sanitizedAlbedo)
         self.metallic = Float16(sanitizedMetallic)
         self.roughness = Float16(sanitizedRoughness)
-        self.normal = SplatRenderer.packHalf3(reconstructedNormal)
+        self.normal = SplatRenderer.packHalf3(finalNormal)
         self.rotation = SplatRenderer.packHalf4(sanitizedRotation.vector)
     }
 }
