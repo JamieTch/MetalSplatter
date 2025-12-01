@@ -1347,6 +1347,7 @@ extension SplatRenderer.Splat {
                   metallic: normalized.metallic,
                   roughness: normalized.roughness,
                   normal: normalized.normal,
+                  hasSerializedNormal: normalized.hasSerializedNormal,
                   pointIndex: index)
     }
 
@@ -1358,6 +1359,7 @@ extension SplatRenderer.Splat {
          metallic: Float,
          roughness: Float,
          normal: SIMD3<Float>,
+         hasSerializedNormal: Bool,
          pointIndex: Int) {
         let sanitizedRotation = SplatRenderer.sanitizeQuaternion(rotation, pointIndex: pointIndex)
         let sanitizedScale = SplatRenderer.sanitizeScale(scale, pointIndex: pointIndex)
@@ -1376,10 +1378,15 @@ extension SplatRenderer.Splat {
                                                                   field: "roughness",
                                                                   pointIndex: pointIndex)
         let serializedNormal = SplatRenderer.sanitizeNormal(normal, pointIndex: pointIndex)
-        let reconstructedNormal = SplatRenderer.reconstructNormal(rotationMatrix: rotationMatrix,
+        let reconstructedNormal: SIMD3<Float>
+        if hasSerializedNormal {
+            reconstructedNormal = serializedNormal
+        } else {
+            reconstructedNormal = SplatRenderer.reconstructNormal(rotationMatrix: rotationMatrix,
                                                                   scale: sanitizedScale,
                                                                   fallbackNormal: serializedNormal,
                                                                   pointIndex: pointIndex)
+        }
 
         let covA = SIMD3<Float>(cov3D[0, 0], cov3D[0, 1], cov3D[0, 2])
         let covB = SIMD3<Float>(cov3D[1, 1], cov3D[1, 2], cov3D[2, 2])

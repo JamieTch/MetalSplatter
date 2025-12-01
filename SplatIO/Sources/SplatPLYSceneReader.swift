@@ -324,9 +324,9 @@ private struct ElementInputMapping {
         result.rotation.imag.z = try element.float32Value(forPropertyIndex: rotation3PropertyIndex)
 
         if let normalPropertyIndices {
-            result.setNormal(try element.normalizedVector(for: normalPropertyIndices))
+            result.setNormal(try element.normalizedVector(for: normalPropertyIndices), isProvided: true)
         } else {
-            result.setNormal(SplatScenePoint.defaultNormal)
+            result.setNormal(SplatScenePoint.defaultNormal, isProvided: false)
         }
 
         if let albedoPropertyIndices {

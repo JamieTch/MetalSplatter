@@ -173,6 +173,7 @@ public struct SplatScenePoint {
     public var metallic: Float
     public var roughness: Float
     public var normal: SIMD3<Float>
+    public var hasSerializedNormal: Bool
 
     public init(position: SIMD3<Float>,
                 color: Color,
@@ -182,7 +183,8 @@ public struct SplatScenePoint {
                 albedo: SIMD3<Float> = Self.defaultAlbedo,
                 metallic: Float = Self.defaultMetallic,
                 roughness: Float = Self.defaultRoughness,
-                normal: SIMD3<Float> = Self.defaultNormal) {
+                normal: SIMD3<Float> = Self.defaultNormal,
+                normalWasProvided: Bool = false) {
         self.position = position
         self.color = color
         self.opacity = opacity
@@ -192,6 +194,7 @@ public struct SplatScenePoint {
         self.metallic = metallic.clamped(to: 0...1)
         self.roughness = roughness.clamped(to: 0...1)
         self.normal = normal.normalizedOrDefault(Self.defaultNormal)
+        self.hasSerializedNormal = normalWasProvided
     }
 
     public var linearNormalized: SplatScenePoint {
@@ -203,7 +206,8 @@ public struct SplatScenePoint {
                         albedo: albedo.clamped01(),
                         metallic: metallic.clamped(to: 0...1),
                         roughness: roughness.clamped(to: 0...1),
-                        normal: normal.normalizedOrDefault(Self.defaultNormal))
+                        normal: normal.normalizedOrDefault(Self.defaultNormal),
+                        normalWasProvided: hasSerializedNormal)
     }
 
     public mutating func setAlbedo(_ input: AlbedoInput) {
@@ -242,8 +246,9 @@ public struct SplatScenePoint {
         }
     }
 
-    public mutating func setNormal(_ newNormal: SIMD3<Float>) {
+    public mutating func setNormal(_ newNormal: SIMD3<Float>, isProvided: Bool = true) {
         normal = newNormal.normalizedOrDefault(Self.defaultNormal)
+        hasSerializedNormal = isProvided
     }
 }
 

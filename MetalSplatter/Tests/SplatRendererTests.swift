@@ -59,6 +59,28 @@ final class SplatRendererPackingTests: XCTestCase {
         XCTAssertEqual(Float(splat.rotation.w), 1, accuracy: 1e-3)
     }
 
+    func testSerializedNormalOverridesReconstruction() {
+        let rotation = simd_quatf(angle: .pi / 3, axis: SIMD3<Float>(0, 1, 0))
+        let scale = SIMD3<Float>(0.1, 0.2, 0.3)
+        let providedNormal = simd_normalize(SIMD3<Float>(1, 1, 0))
+        let point = SplatScenePoint(position: SIMD3<Float>(1, 2, 3),
+                                    color: .linearFloat(SIMD3<Float>(repeating: 0.25)),
+                                    opacity: .linearFloat(0.6),
+                                    scale: .linearFloat(scale),
+                                    rotation: rotation,
+                                    albedo: SIMD3<Float>(repeating: 0.5),
+                                    metallic: 0.1,
+                                    roughness: 0.2,
+                                    normal: providedNormal,
+                                    normalWasProvided: true)
+
+        let splat = SplatRenderer.Splat(point, index: 1)
+
+        XCTAssertEqual(Float(splat.normal.x), providedNormal.x, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.y), providedNormal.y, accuracy: 1e-3)
+        XCTAssertEqual(Float(splat.normal.z), providedNormal.z, accuracy: 1e-3)
+    }
+
     func testInvalidMaterialValuesFallBackToDefaults() {
         var point = SplatScenePoint(position: .zero,
                                     color: .linearFloat(SIMD3<Float>(Float.nan, Float.nan, Float.nan)),
