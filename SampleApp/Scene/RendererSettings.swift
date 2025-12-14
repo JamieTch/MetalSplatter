@@ -21,8 +21,13 @@ final class RendererSettings: ObservableObject {
         .normalDotComparison
     ]
 
+    let sphericalHarmonicsDebugModes: [SplatRenderer.DebugViewMode] = [
+        .diffuseSphericalHarmonics,
+        .specularSphericalHarmonics
+    ]
+
     var allDebugModes: [SplatRenderer.DebugViewMode] {
-        primaryDebugModes + normalDebugModes
+        primaryDebugModes + normalDebugModes + sphericalHarmonicsDebugModes
     }
 }
 
@@ -75,6 +80,10 @@ extension SplatRenderer.DebugViewMode {
             return "|Decoded - Raw|"
         case .normalDotComparison:
             return "N·V (decoded vs raw)"
+        case .diffuseSphericalHarmonics:
+            return "Diffuse SH"
+        case .specularSphericalHarmonics:
+            return "Specular SH"
         }
     }
 }
