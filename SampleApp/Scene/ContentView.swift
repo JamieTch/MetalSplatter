@@ -60,11 +60,11 @@ struct ContentView: View {
 
             // Debug view selector
             Picker("Debug View", selection: $rendererSettings.debugViewMode) {
-                ForEach(rendererSettings.primaryDebugModes, id: \.self) { mode in
+                ForEach(rendererSettings.allDebugModes, id: \.self) { mode in
                     Text(mode.displayName).tag(mode)
                 }
             }
-            .pickerStyle(.segmented)
+            .pickerStyle(.menu)
             .padding(.horizontal)
 
             // Read a scene file from disk

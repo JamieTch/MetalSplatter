@@ -13,6 +13,17 @@ final class RendererSettings: ObservableObject {
         .depth,
         .coverage
     ]
+
+    let normalDebugModes: [SplatRenderer.DebugViewMode] = [
+        .normalSweep,
+        .normalRaw,
+        .normalDifference,
+        .normalDotComparison
+    ]
+
+    var allDebugModes: [SplatRenderer.DebugViewMode] {
+        primaryDebugModes + normalDebugModes
+    }
 }
 
 extension SplatRenderer.DebugViewMode {
@@ -57,13 +68,13 @@ extension SplatRenderer.DebugViewMode {
         case .metallicSweep:
             return "Metallic (Alt)"
         case .normalSweep:
-            return "Normal (Alt)"
+            return "Decoded Normal"
         case .normalRaw:
-            return "Normal Raw"
+            return "Raw Normal"
         case .normalDifference:
-            return "Normal Δ"
+            return "|Decoded - Raw|"
         case .normalDotComparison:
-            return "N·V Compare"
+            return "N·V (decoded vs raw)"
         }
     }
 }
