@@ -127,8 +127,6 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
     Uniforms uniforms = uniformsArray.uniforms[min(int(viewIndex), kMaxViewCount)];
     float3 normal = safeNormalize(float3(in.normal), float3(0, 0, 1));
     float3 viewDirection = safeNormalize(float3(in.viewDirection), float3(0, 0, 1));
-    float3 reflectionDirection = reflect(-viewDirection, normal);
-
     float3 diffuseSH = in.diffuseSH;
     float3 specularSH = in.specularSH;
 
@@ -341,9 +339,12 @@ if (DEBUG_VIEW_VALUE == 1) {
     half3 shaded = shadeGaussian(albedo,
                                  metallic,
                                  roughness,
-                                 normal_dec,
-                                 viewDir,
+                                 shadingNormal,
+                                 shadingView,
+                                 shadingReflection,
                                  ao,
+                                 diffuseSH,
+                                 specularSH,
                                  environmentMap,
                                  brdfLUT,
                                  environmentSampler,
