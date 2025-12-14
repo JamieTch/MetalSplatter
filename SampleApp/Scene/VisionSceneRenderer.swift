@@ -114,10 +114,13 @@ class VisionSceneRenderer {
     private var didAutoCapture: Bool = false
     private var captureNextFrame: Bool = false
     private var lastBrightnessProbeFrame: UInt64 = 0
-    private var rendererSettingsCancellable: AnyCancellable?
+    private var rendererSettingsCancellables = Set<AnyCancellable>()
     private var debugViewModeStorage: SplatRenderer.DebugViewMode = .albedo
     private let debugViewModeLock = NSLock()
     private var debugViewModeNeedsApply = false
+    private var rotateNormalsByQuaternionStorage: Bool = true
+    private let rotateNormalsByQuaternionLock = NSLock()
+    private var rotateNormalsByQuaternionNeedsApply = false
 
     init(_ layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
@@ -175,6 +178,7 @@ class VisionSceneRenderer {
                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await splat.read(from: url)
             splat.debugViewMode = debugViewMode
+            splat.rotateNormalsByQuaternion = rotateNormalsByQuaternion
             modelRenderer = splat
             if environmentPrefilterResult != nil {
                 environmentResourcesDirty = true
@@ -623,6 +627,7 @@ class VisionSceneRenderer {
             } else {
                 autoreleasepool {
                     self.applyDebugViewModeIfNeeded()
+                    self.applyRotateNormalsByQuaternionIfNeeded()
                     self.renderFrame()
                 }
             }
@@ -631,10 +636,21 @@ class VisionSceneRenderer {
 
     func bindRendererSettings(_ settings: RendererSettings) {
         debugViewMode = settings.debugViewMode
-        rendererSettingsCancellable = settings.$debugViewMode
+        rotateNormalsByQuaternion = settings.rotateNormalsByQuaternion
+
+        rendererSettingsCancellables.removeAll()
+
+        settings.$debugViewMode
             .sink { [weak self] mode in
                 self?.debugViewMode = mode
             }
+            .store(in: &rendererSettingsCancellables)
+
+        settings.$rotateNormalsByQuaternion
+            .sink { [weak self] shouldRotate in
+                self?.rotateNormalsByQuaternion = shouldRotate
+            }
+            .store(in: &rendererSettingsCancellables)
     }
 
     private var debugViewMode: SplatRenderer.DebugViewMode {
@@ -654,6 +670,23 @@ class VisionSceneRenderer {
         }
     }
 
+    private var rotateNormalsByQuaternion: Bool {
+        get {
+            rotateNormalsByQuaternionLock.lock()
+            defer { rotateNormalsByQuaternionLock.unlock() }
+            return rotateNormalsByQuaternionStorage
+        }
+        set {
+            rotateNormalsByQuaternionLock.lock()
+            let didChange = rotateNormalsByQuaternionStorage != newValue
+            rotateNormalsByQuaternionStorage = newValue
+            if didChange {
+                rotateNormalsByQuaternionNeedsApply = true
+            }
+            rotateNormalsByQuaternionLock.unlock()
+        }
+    }
+
     private func applyDebugViewModeIfNeeded() {
         let mode: SplatRenderer.DebugViewMode?
         debugViewModeLock.lock()
@@ -667,6 +700,21 @@ class VisionSceneRenderer {
 
         guard let mode, let splat = modelRenderer as? SplatRenderer else { return }
         splat.debugViewMode = mode
+    }
+
+    private func applyRotateNormalsByQuaternionIfNeeded() {
+        let shouldRotate: Bool?
+        rotateNormalsByQuaternionLock.lock()
+        if rotateNormalsByQuaternionNeedsApply {
+            rotateNormalsByQuaternionNeedsApply = false
+            shouldRotate = rotateNormalsByQuaternionStorage
+        } else {
+            shouldRotate = nil
+        }
+        rotateNormalsByQuaternionLock.unlock()
+
+        guard let shouldRotate, let splat = modelRenderer as? SplatRenderer else { return }
+        splat.rotateNormalsByQuaternion = shouldRotate
     }
 
     private func updateEnvironmentProbeIfNeeded() {

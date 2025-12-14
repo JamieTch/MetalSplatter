@@ -3,6 +3,7 @@ import MetalSplatter
 
 final class RendererSettings: ObservableObject {
     @Published var debugViewMode: SplatRenderer.DebugViewMode = .albedo
+    @Published var rotateNormalsByQuaternion: Bool = true
     let primaryDebugModes: [SplatRenderer.DebugViewMode] = [
         .shaded,
         .albedo,

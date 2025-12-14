@@ -299,6 +299,8 @@ public class SplatRenderer {
         var indexedSplatCount: UInt32
         var shCoefficientCount: UInt32
         var useSHMask: UInt32
+        var rotateNormalsByQuaternion: UInt32
+        var rotateNormalsPadding: SIMD3<UInt32> = .zero
     }
 
     // Keep in sync with Shaders.metal : UniformsArray
@@ -425,6 +427,8 @@ public class SplatRenderer {
             resetPipelineStates()
         }
     }
+
+    public var rotateNormalsByQuaternion: Bool = true
 
     private var writeDepth: Bool {
         depthFormat != .invalid
@@ -1016,7 +1020,8 @@ public class SplatRenderer {
                                     splatCount: splatCount,
                                     indexedSplatCount: indexedSplatCount,
                                     shCoefficientCount: shCoefficientCount,
-                                    useSHMask: shMask)
+                                    useSHMask: shMask,
+                                    rotateNormalsByQuaternion: rotateNormalsByQuaternion ? 1 : 0)
             self.uniforms.pointee.setUniforms(index: i, uniforms)
         }
 

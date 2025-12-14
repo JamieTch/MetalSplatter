@@ -67,6 +67,9 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .padding(.horizontal)
 
+            Toggle("Rotate Normals by Quaternion", isOn: $rendererSettings.rotateNormalsByQuaternion)
+                .padding(.horizontal)
+
             // Read a scene file from disk
             Button("Read Scene File") {
                 isPickingFile = true
