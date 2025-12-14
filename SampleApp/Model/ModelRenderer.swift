@@ -19,3 +19,7 @@ public protocol ModelRenderer {
                 renderTargetArrayLength: Int,
                 to commandBuffer: MTLCommandBuffer) throws
 }
+
+public protocol EnvironmentBindableRenderer: ModelRenderer {
+    func applyEnvironment(environmentMap: MTLTexture?, brdfLookup: MTLTexture?) throws
+}

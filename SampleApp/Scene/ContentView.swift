@@ -101,6 +101,26 @@ struct ContentView: View {
             }
             .padding(.horizontal)
 
+            Divider().padding(.vertical, 4)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(PreloadedMeshModel.allCases) { model in
+                    Button(model.displayName) {
+                        guard let url = model.bundleURL else { return }
+                        let identifier = ModelIdentifier.mesh(url)
+                        rendererSettings.activeModel = identifier
+                        openWindow(value: identifier)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal)
+                    .buttonStyle(.borderedProminent)
+#if os(visionOS)
+                    .disabled(immersiveSpaceIsShown)
+#endif
+                }
+            }
+            .padding(.horizontal)
+
             Spacer(minLength: 24)
 
             Button("Show Sample Box") {
@@ -117,7 +137,7 @@ struct ContentView: View {
             Spacer()
 
 #if os(visionOS)
-            if case .gaussianSplat = rendererSettings.activeModel {
+            if let activeModel = rendererSettings.activeModel, activeModel.supportsCalibration {
                 switch rendererSettings.calibrationMode {
                 case .idle:
                     Button("Calibrate") {

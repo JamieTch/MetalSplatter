@@ -70,6 +70,14 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
             try await splat.read(from: url)
             splat.debugViewMode = debugViewMode
             modelRenderer = splat
+        case .mesh(let url):
+            modelRenderer = try MeshModelRenderer(device: device,
+                                                  colorFormat: metalKitView.colorPixelFormat,
+                                                  depthFormat: metalKitView.depthStencilPixelFormat,
+                                                  sampleCount: metalKitView.sampleCount,
+                                                  maxViewCount: 1,
+                                                  maxSimultaneousRenders: Constants.maxSimultaneousRenders,
+                                                  url: url)
         case .sampleBox:
             modelRenderer = try! await SampleBoxRenderer(device: device,
                                                          colorFormat: metalKitView.colorPixelFormat,

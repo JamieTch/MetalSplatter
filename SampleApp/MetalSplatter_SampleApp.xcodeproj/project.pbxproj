@@ -36,6 +36,10 @@
                 61F2B3B32F5C12AA00A1A1A1 /* CalibrationAnchor.metal in Sources */ = {isa = PBXBuildFile; fileRef = 61F2B3A42F5C12AA00A1A1A1 /* CalibrationAnchor.metal */; };
                 61B9F0A12BC4D50000AA0001 /* PreloadedGaussianModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */; };
                 61B9F0A32BC4D50000AA0001 /* GaussianSplats in Resources */ = {isa = PBXBuildFile; fileRef = 61B9F0A22BC4D50000AA0001 /* GaussianSplats */; };
+                89F7A0013ABCDEF000123456 /* MeshModelRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F79FFE3ABCDEF000123456 /* MeshModelRenderer.swift */; };
+                89F7A0023ABCDEF000123456 /* PreloadedMeshModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89F79FFF3ABCDEF000123456 /* PreloadedMeshModel.swift */; };
+                89F7A0033ABCDEF000123456 /* MeshRendererShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 89F7A0003ABCDEF000123456 /* MeshRendererShaders.metal */; };
+                89F7A0043ABCDEF000123456 /* Cube.obj in Resources */ = {isa = PBXBuildFile; fileRef = 89F7A0053ABCDEF000123456 /* Cube.obj */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -66,6 +70,10 @@
                 617E50B02B314BE200F99766 /* MetalSplatter SampleApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "MetalSplatter SampleApp.app"; sourceTree = BUILT_PRODUCTS_DIR; };
                 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreloadedGaussianModel.swift; sourceTree = "<group>"; };
                 61B9F0A22BC4D50000AA0001 /* GaussianSplats */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GaussianSplats; path = GaussianSplats; sourceTree = "<group>"; };
+                89F79FFE3ABCDEF000123456 /* MeshModelRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshModelRenderer.swift; sourceTree = "<group>"; };
+                89F79FFF3ABCDEF000123456 /* PreloadedMeshModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreloadedMeshModel.swift; sourceTree = "<group>"; };
+                89F7A0003ABCDEF000123456 /* MeshRendererShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = MeshRendererShaders.metal; sourceTree = "<group>"; };
+                89F7A0053ABCDEF000123456 /* Cube.obj */ = {isa = PBXFileReference; lastKnownFileType = text; path = Cube.obj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -93,6 +101,9 @@
                                 61791DDC2B4154FB00302B57 /* SampleBoxRenderer+ModelRenderer.swift */,
                                 61791DDA2B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift */,
                                 61B9F0A02BC4D50000AA0001 /* PreloadedGaussianModel.swift */,
+                                89F79FFE3ABCDEF000123456 /* MeshModelRenderer.swift */,
+                                89F79FFF3ABCDEF000123456 /* PreloadedMeshModel.swift */,
+                                89F7A0003ABCDEF000123456 /* MeshRendererShaders.metal */,
                         );
                         path = Model;
                         sourceTree = "<group>";
@@ -101,6 +112,7 @@
                         isa = PBXGroup;
                         children = (
                                 61B9F0A22BC4D50000AA0001 /* GaussianSplats */,
+                                89F7A0053ABCDEF000123456 /* Cube.obj */,
                         );
                         path = Resources;
                         sourceTree = "<group>";
@@ -248,6 +260,7 @@
                         buildActionMask = 2147483647;
                         files = (
                                 61B9F0A32BC4D50000AA0001 /* GaussianSplats in Resources */,
+                                89F7A0043ABCDEF000123456 /* Cube.obj in Resources */,
                         );
                         runOnlyForDeploymentPostprocessing = 0;
                 };
@@ -273,7 +286,9 @@
                                 147AFBD02E33ED730052B2AD /* CameraController.swift in Sources */,
                                 147AFBD12E33ED730052B2AD /* InteractiveMTKView.swift in Sources */,
                                 61791DE82B4154FB00302B57 /* ModelRenderer.swift in Sources */,
+                                89F7A0013ABCDEF000123456 /* MeshModelRenderer.swift in Sources */,
                                 61791DCF2B41544300302B57 /* Assets.xcassets in Sources */,
+                                89F7A0023ABCDEF000123456 /* PreloadedMeshModel.swift in Sources */,
                                 61791E132B416DD700302B57 /* Constants.swift in Sources */,
                                 61791E162B42297B00302B57 /* MetalKitSceneView.swift in Sources */,
                                 610347DC2B46875A00693CE3 /* ContentStageConfiguration.swift in Sources */,
@@ -281,6 +296,7 @@
                                 61F2B3B12F5C12AA00A1A1A1 /* CalibrationStore.swift in Sources */,
                                 61F2B3B22F5C12AA00A1A1A1 /* CalibrationAnchorRenderer.swift in Sources */,
                                 61F2B3B32F5C12AA00A1A1A1 /* CalibrationAnchor.metal in Sources */,
+                                89F7A0033ABCDEF000123456 /* MeshRendererShaders.metal in Sources */,
                                 61F2B3A12F5C123400A1A1A1 /* RendererSettings.swift in Sources */,
                         );
 			runOnlyForDeploymentPostprocessing = 0;

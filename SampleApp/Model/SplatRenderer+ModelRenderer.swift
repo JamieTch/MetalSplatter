@@ -25,3 +25,10 @@ extension SplatRenderer: ModelRenderer {
                    to: commandBuffer)
     }
 }
+
+extension SplatRenderer: EnvironmentBindableRenderer {
+    public func applyEnvironment(environmentMap: MTLTexture?, brdfLookup: MTLTexture?) throws {
+        try setEnvironmentMap(environmentMap)
+        try setBRDFLookupTexture(brdfLookup)
+    }
+}

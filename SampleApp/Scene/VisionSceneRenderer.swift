@@ -180,7 +180,6 @@ class VisionSceneRenderer {
         notifyCalibrationMode(.idle)
 
         if let model,
-           case .gaussianSplat = model,
            let key = calibrationKey(for: model),
            let calibration = calibrationStore.loadCalibration(forKey: key) {
             interactionState.translation = calibration.translation
@@ -188,9 +187,8 @@ class VisionSceneRenderer {
             interactionState.scale = calibration.scale
         }
 
-        if let splat = modelRenderer as? SplatRenderer {
-            try? splat.setEnvironmentMap(nil)
-            try? splat.setBRDFLookupTexture(nil)
+        if let bindable = modelRenderer as? EnvironmentBindableRenderer {
+            try? bindable.applyEnvironment(environmentMap: nil, brdfLookup: nil)
         }
         modelRenderer = nil
         switch model {
@@ -204,6 +202,18 @@ class VisionSceneRenderer {
             try await splat.read(from: url)
             splat.debugViewMode = debugViewMode
             modelRenderer = splat
+            if environmentPrefilterResult != nil {
+                environmentResourcesDirty = true
+                lastAppliedEnvironmentRevision = 0
+            }
+        case .mesh(let url):
+            modelRenderer = try MeshModelRenderer(device: device,
+                                                  colorFormat: layerRenderer.configuration.colorFormat,
+                                                  depthFormat: layerRenderer.configuration.depthFormat,
+                                                  sampleCount: 1,
+                                                  maxViewCount: layerRenderer.properties.viewCount,
+                                                  maxSimultaneousRenders: Constants.maxSimultaneousRenders,
+                                                  url: url)
             if environmentPrefilterResult != nil {
                 environmentResourcesDirty = true
                 lastAppliedEnvironmentRevision = 0
@@ -632,7 +642,7 @@ class VisionSceneRenderer {
         }
 
         if isCalibrating,
-           case .gaussianSplat = model,
+           modelSupportsCalibration(model),
            let anchorRenderer = calibrationAnchorRenderer,
            let colorTexture = drawable.colorTextures.first {
             anchorRenderer.render(viewports: viewports,
@@ -740,14 +750,14 @@ class VisionSceneRenderer {
         for command in commands {
             switch command {
             case .start:
-                guard case .gaussianSplat = model, !isCalibrating else { continue }
+                guard modelSupportsCalibration(model), !isCalibrating else { continue }
                 calibrationSnapshot = interactionState
                 isCalibrating = true
                 notifyCalibrationMode(.running)
             case .confirm:
                 guard isCalibrating else { continue }
                 if let model,
-                   case .gaussianSplat = model,
+                   modelSupportsCalibration(model),
                    let key = calibrationKey(for: model) {
                     let anchorMetadata = lastDeviceAnchorTransform.map { ModelCalibration.AnchorMetadata(transform: $0) }
                     let calibration = ModelCalibration(translation: interactionState.translation,
@@ -793,9 +803,22 @@ class VisionSceneRenderer {
             }
             let suffix = String(format: "%016llx", hash)
             return "\(baseName)-\(suffix)"
+        case .mesh(let url):
+            let baseName = url.deletingPathExtension().lastPathComponent
+            let canonicalPath = url.standardizedFileURL.absoluteString
+            var hash: UInt64 = 5381
+            for byte in canonicalPath.utf8 {
+                hash = ((hash << 5) &+ hash) &+ UInt64(byte)
+            }
+            let suffix = String(format: "%016llx", hash)
+            return "mesh-\(baseName)-\(suffix)"
         case .sampleBox:
             return nil
         }
+    }
+
+    private func modelSupportsCalibration(_ model: ModelIdentifier?) -> Bool {
+        return model?.supportsCalibration ?? false
     }
 
     private func updateEnvironmentProbeIfNeeded() {
@@ -840,7 +863,7 @@ class VisionSceneRenderer {
             return
         }
 
-        guard let splatRenderer = modelRenderer as? SplatRenderer else {
+        guard let bindable = modelRenderer as? EnvironmentBindableRenderer else {
             logBindingSkip(.rendererUnavailable)
             return
         }
@@ -850,8 +873,8 @@ class VisionSceneRenderer {
         Self.log.debug("Applying environment resources revision \(result.revision) (environment: \(Self.describeTexture(result.environmentMap)), brdf: \(Self.describeTexture(result.brdfLookup)))")
 
         do {
-            try splatRenderer.setEnvironmentMap(result.environmentMap)
-            try splatRenderer.setBRDFLookupTexture(result.brdfLookup)
+            try bindable.applyEnvironment(environmentMap: result.environmentMap,
+                                          brdfLookup: result.brdfLookup)
             environmentResourcesDirty = false
             lastAppliedEnvironmentRevision = result.revision
         } catch {
@@ -932,7 +955,7 @@ class VisionSceneRenderer {
         lastBindingSkipReason = reason
         switch reason {
         case .rendererUnavailable:
-            Self.log.debug("Skipping environment binding: current renderer is not a SplatRenderer")
+            Self.log.debug("Skipping environment binding: current renderer is not environment-bindable")
         case .resultMissing:
             Self.log.debug("Skipping environment binding: prefilter result unavailable")
         case .notDirty:
