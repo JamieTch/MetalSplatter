@@ -286,77 +286,73 @@ if (DEBUG_VIEW_VALUE == 1) {
 } else if (DEBUG_VIEW_VALUE == 25) {
     // Raw (pre-decode) normal visualization
     return half4(normal_raw * 0.5h + 0.5h, 1);
+} else if (DEBUG_VIEW_VALUE == 26) {
+    // Difference heatmap between decoded and raw normals
+    half3 diff = abs(normal_dec - normal_raw);
+    return half4(diff, 1);
+} else if (DEBUG_VIEW_VALUE == 27) {
+    // N·V comparison: R=using decoded normal, G=using raw normal
+    half3 V = normalize(viewDir);
+    half ndv_dec = saturate(dot(normal_dec, V));
+    half ndv_raw = saturate(dot(normal_raw, V));
+    return half4(ndv_dec, ndv_raw, 0.0h, 1);
+} else if (DEBUG_VIEW_VALUE == 8) {
+    // Shaded result with AO forced to 1 (tests if AO is zeroing energy)
+    half3 shaded = shadeGaussian(albedo,
+                                 metallic,
+                                 roughness,
+                                 shadingNormal,
+                                 shadingView,
+                                 shadingReflection,
+                                 half(1.0),   // force AO = 1
+                                 diffuseSH,
+                                 specularSH,
+                                 environmentMap,
+                                 brdfLUT,
+                                 environmentSampler,
+                                 brdfSampler);
+    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 9) {
+    // Direct environment reflection sample (tests env binding/indices)
+    half3 N = normalize(normal);
+    half3 V = normalize(viewDir);
+    half3 R = reflect(-V, N);
+    half3 env = environmentMap.sample(environmentSampler, float3(R)).rgb;
+    return half4(env, 1);
+} else if (DEBUG_VIEW_VALUE == 10) {
+    // N·V visualization (tests geometry/normal-view relationship)
+    half3 N = normalize(normal);
+    half3 V = normalize(viewDir);
+    half ndv = saturate(dot(N, V));
+    return half4(ndv, ndv, ndv, 1);
+} else if (DEBUG_VIEW_VALUE == 12) {
+    // Simple Lambert with a fixed key light (no env/BRDF) to prove shading path works
+    half3 N = normalize(normal);
+    half3 L = normalize(half3(0.4h, 0.8h, 0.4h));
+    half ndl = saturate(dot(N, L));
+    half3 lit = albedo * ndl;
+    return half4(lit * accumulatedAlpha, accumulatedAlpha);
+} else if (DEBUG_VIEW_VALUE == 13) {
+    // BRDF LUT debug: show LUT sample at center to validate BRDF binding
+    half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
+    return half4(l.x, l.y, 0, 1);
+} else if (DEBUG_VIEW_VALUE == 7) {
+    // Shaded result (uses environment)
+    half3 shaded = shadeGaussian(albedo,
+                                 metallic,
+                                 roughness,
+                                 normal_dec,
+                                 viewDir,
+                                 ao,
+                                 environmentMap,
+                                 brdfLUT,
+                                 environmentSampler,
+                                 brdfSampler);
+    return half4(shaded * accumulatedAlpha, accumulatedAlpha);
+} else {
+    // Coverage and depth handled in postprocess
+    return half4(0);
 }
-
-// NOTE: case 26 (“difference heatmap”) was omitted here because its body
-// wasn't present in your snippet. Add it later if needed.
-
-// If we get here, proceed with your regular PBR/SH shading…
-        half3 diff = abs(normal_dec - normal_raw);
-        return half4(diff, 1);
-    } else if (DEBUG_VIEW_VALUE == 27) {
-        // N·V comparison: R=using decoded normal, G=using raw normal
-        half3 V = normalize(viewDir);
-        half ndv_dec = saturate(dot(normal_dec, V));
-        half ndv_raw = saturate(dot(normal_raw, V));
-        return half4(ndv_dec, ndv_raw, 0.0h, 1);
-    } else if (DEBUG_VIEW_VALUE == 8) {
-        // Shaded result with AO forced to 1 (tests if AO is zeroing energy)
-        half3 shaded = shadeGaussian(albedo,
-                                     metallic,
-                                     roughness,
-                                     shadingNormal,
-                                     shadingView,
-                                     shadingReflection,
-                                     half(1.0),   // force AO = 1
-                                     diffuseSH,
-                                     specularSH,
-                                     environmentMap,
-                                     brdfLUT,
-                                     environmentSampler,
-                                     brdfSampler);
-        return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-    } else if (DEBUG_VIEW_VALUE == 9) {
-        // Direct environment reflection sample (tests env binding/indices)
-        half3 N = normalize(normal);
-        half3 V = normalize(viewDir);
-        half3 R = reflect(-V, N);
-        half3 env = environmentMap.sample(environmentSampler, float3(R)).rgb;
-        return half4(env, 1);
-    } else if (DEBUG_VIEW_VALUE == 10) {
-        // N·V visualization (tests geometry/normal-view relationship)
-        half3 N = normalize(normal);
-        half3 V = normalize(viewDir);
-        half ndv = saturate(dot(N, V));
-        return half4(ndv, ndv, ndv, 1);
-    } else if (DEBUG_VIEW_VALUE == 12) {
-        // Simple Lambert with a fixed key light (no env/BRDF) to prove shading path works
-        half3 N = normalize(normal);
-        half3 L = normalize(half3(0.4h, 0.8h, 0.4h));
-        half ndl = saturate(dot(N, L));
-        half3 lit = albedo * ndl;
-        return half4(lit * accumulatedAlpha, accumulatedAlpha);
-    } else if (DEBUG_VIEW_VALUE == 13) {
-        // BRDF LUT debug: show LUT sample at center to validate BRDF binding
-        half2 l = brdfLUT.sample(brdfSampler, float2(0.5, 0.5)).rg;
-        return half4(l.x, l.y, 0, 1);
-    } else if (DEBUG_VIEW_VALUE == 7) {
-        // Shaded result (uses environment)
-        half3 shaded = shadeGaussian(albedo,
-                                     metallic,
-                                     roughness,
-                                     normal_dec,
-                                     viewDir,
-                                     ao,
-                                     environmentMap,
-                                     brdfLUT,
-                                     environmentSampler,
-                                     brdfSampler);
-        return half4(shaded * accumulatedAlpha, accumulatedAlpha);
-    } else {
-        // Coverage and depth handled in postprocess
-        return half4(0);
-    }
 // UI-driven debug modes (function constant)
 // 28: diffuse SH only, 29: specular SH only, 7: full shaded, else: coverage/depth handled in post
 
