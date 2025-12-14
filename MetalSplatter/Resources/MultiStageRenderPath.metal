@@ -386,6 +386,7 @@ if (DEBUG_VIEW_VALUE == 28) {
     // Coverage and depth handled in postprocess
     return half4(0);
 }
+}
 
 fragment FragmentOut postprocessFragmentShader(FragmentValues fragmentValues [[imageblock_data]],
                                                texturecube<half> environmentMap [[texture(0)]],
