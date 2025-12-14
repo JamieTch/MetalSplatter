@@ -120,6 +120,7 @@ class VisionSceneRenderer {
     private var debugViewModeNeedsApply = false
     private weak var rendererSettings: RendererSettings?
     private let calibrationStore = CalibrationStore()
+    private var lastConfirmedCalibration: ModelCalibration?
     private var pendingCalibrationCommands: [RendererSettings.CalibrationCommand] = []
     private let calibrationCommandLock = NSLock()
     private var isCalibrating = false
@@ -174,6 +175,7 @@ class VisionSceneRenderer {
         calibrationSnapshot = nil
         isCalibrating = false
         lastDeviceAnchorTransform = nil
+        lastConfirmedCalibration = nil
         calibrationCommandLock.lock()
         pendingCalibrationCommands.removeAll()
         calibrationCommandLock.unlock()
@@ -183,6 +185,7 @@ class VisionSceneRenderer {
            case .gaussianSplat = model,
            let key = calibrationKey(for: model),
            let calibration = calibrationStore.loadCalibration(forKey: key) {
+            lastConfirmedCalibration = calibration
             interactionState.translation = calibration.translation
             interactionState.rotation = calibration.rotation
             interactionState.scale = calibration.scale
@@ -754,6 +757,7 @@ class VisionSceneRenderer {
                                                        rotation: interactionState.rotation,
                                                        scale: interactionState.scale,
                                                        anchor: anchorMetadata)
+                    lastConfirmedCalibration = calibration
                     do {
                         try calibrationStore.saveCalibration(calibration, forKey: key)
                     } catch {
@@ -771,6 +775,12 @@ class VisionSceneRenderer {
                 isCalibrating = false
                 calibrationSnapshot = nil
                 notifyCalibrationMode(.idle)
+            case .reset:
+                guard !isCalibrating,
+                      let calibration = lastConfirmedCalibration else { continue }
+                interactionState.translation = calibration.translation
+                interactionState.rotation = calibration.rotation
+                interactionState.scale = calibration.scale
             }
         }
     }
