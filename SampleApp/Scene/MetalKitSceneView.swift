@@ -56,6 +56,7 @@ struct MetalKitSceneView: ViewRepresentable {
         metalKitView.delegate = renderer
 
         renderer?.debugViewMode = rendererSettings.debugViewMode
+        renderer?.rotateNormalsByQuaternion = rendererSettings.rotateNormalsByQuaternion
 
         Task {
             do {
@@ -81,6 +82,7 @@ struct MetalKitSceneView: ViewRepresentable {
     private func updateView(_ coordinator: Coordinator) {
         guard let renderer = coordinator.renderer else { return }
         renderer.debugViewMode = rendererSettings.debugViewMode
+        renderer.rotateNormalsByQuaternion = rendererSettings.rotateNormalsByQuaternion
         Task {
             do {
                 try await renderer.load(modelIdentifier)

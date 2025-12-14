@@ -49,6 +49,8 @@ typedef struct
     uint indexedSplatCount;
     uint shCoefficientCount;
     uint useSHMask;
+    uint rotateNormalsByQuaternion;
+    uint3 _paddingRotateNormals;
 } Uniforms;
 
 typedef struct

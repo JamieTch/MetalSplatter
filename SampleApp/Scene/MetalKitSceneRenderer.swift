@@ -38,6 +38,13 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    var rotateNormalsByQuaternion = true {
+        didSet {
+            guard oldValue != rotateNormalsByQuaternion else { return }
+            applyRotateNormalsByQuaternion()
+        }
+    }
+
     init?(_ metalKitView: MTKView, camera: CameraController? = nil) {
         self.device = metalKitView.device!
         guard let queue = self.device.makeCommandQueue() else { return nil }
@@ -69,6 +76,7 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
                                                 maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await splat.read(from: url)
             splat.debugViewMode = debugViewMode
+            splat.rotateNormalsByQuaternion = rotateNormalsByQuaternion
             modelRenderer = splat
         case .sampleBox:
             modelRenderer = try! await SampleBoxRenderer(device: device,
@@ -172,6 +180,11 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
     private func applyDebugViewMode() {
         guard let splat = modelRenderer as? SplatRenderer else { return }
         splat.debugViewMode = debugViewMode
+    }
+
+    private func applyRotateNormalsByQuaternion() {
+        guard let splat = modelRenderer as? SplatRenderer else { return }
+        splat.rotateNormalsByQuaternion = rotateNormalsByQuaternion
     }
 }
 
