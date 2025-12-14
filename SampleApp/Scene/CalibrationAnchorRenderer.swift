@@ -23,8 +23,8 @@ final class CalibrationAnchorRenderer {
 
     init(device: MTLDevice, colorFormat: MTLPixelFormat, depthFormat: MTLPixelFormat) throws {
         let library = try device.makeDefaultLibrary()
-        guard let vertexFunction = library.makeFunction(name: "calibrationAnchorVertex"),
-              let fragmentFunction = library.makeFunction(name: "calibrationAnchorFragment") else {
+        guard let vertexFunction = library?.makeFunction(name: "calibrationAnchorVertex"),
+              let fragmentFunction = library?.makeFunction(name: "calibrationAnchorFragment") else {
             throw RendererError.missingShader
         }
 

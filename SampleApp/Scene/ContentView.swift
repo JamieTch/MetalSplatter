@@ -120,13 +120,21 @@ struct ContentView: View {
             if case .gaussianSplat = rendererSettings.activeModel {
                 switch rendererSettings.calibrationMode {
                 case .idle:
-                    Button("Calibrate") {
-                        rendererSettings.calibrationMode = .running
-                        rendererSettings.calibrationCommands.send(.start)
+                    HStack(spacing: 16) {
+                        Button("Calibrate") {
+                            rendererSettings.calibrationMode = .running
+                            rendererSettings.calibrationCommands.send(.start)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!immersiveSpaceIsShown)
+
+                        Button("Reset") {
+                            rendererSettings.calibrationCommands.send(.reset)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!immersiveSpaceIsShown)
                     }
-                    .buttonStyle(.borderedProminent)
                     .padding(.bottom)
-                    .disabled(!immersiveSpaceIsShown)
                 case .running:
                     HStack(spacing: 16) {
                         Button("Confirm Calibration") {

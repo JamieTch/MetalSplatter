@@ -12,6 +12,7 @@ final class RendererSettings: ObservableObject {
         case start
         case confirm
         case cancel
+        case reset
     }
 
     @Published var debugViewMode: SplatRenderer.DebugViewMode = .albedo
