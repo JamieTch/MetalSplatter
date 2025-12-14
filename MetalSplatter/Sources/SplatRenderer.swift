@@ -633,6 +633,25 @@ public class SplatRenderer {
         var newPoints = SplatMemoryBuffer()
         try await newPoints.read(from: try AutodetectSceneReader(url))
         try add(newPoints.points)
+
+        if containsMaterialParameters(newPoints.points) {
+            // GIR exports provide physically-based material attributes (albedo/metallic/roughness/normal)
+            // for relighting. Disable legacy spherical harmonics contributions so we don't double-light
+            // splats with baked radiance and accidentally introduce specular artifacts.
+            gaussianImageRepresentationMetadata = GaussianImageRepresentationMetadata(
+                sphericalHarmonicsCoefficientCount: 0,
+                sphericalHarmonicsUsage: []
+            )
+        }
+    }
+
+    private func containsMaterialParameters(_ points: [SplatScenePoint]) -> Bool {
+        points.contains { point in
+            point.albedo != SplatScenePoint.defaultAlbedo ||
+            point.metallic != SplatScenePoint.defaultMetallic ||
+            point.roughness != SplatScenePoint.defaultRoughness ||
+            point.normal != SplatScenePoint.defaultNormal
+        }
     }
 
     private func resetPipelineStates() {
