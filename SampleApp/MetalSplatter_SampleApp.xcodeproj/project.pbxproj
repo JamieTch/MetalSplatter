@@ -73,7 +73,7 @@
                 89F79FFE3ABCDEF000123456 /* MeshModelRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshModelRenderer.swift; sourceTree = "<group>"; };
                 89F79FFF3ABCDEF000123456 /* PreloadedMeshModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreloadedMeshModel.swift; sourceTree = "<group>"; };
                 89F7A0003ABCDEF000123456 /* MeshRendererShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = MeshRendererShaders.metal; sourceTree = "<group>"; };
-                89F7A0053ABCDEF000123456 /* Cube.obj */ = {isa = PBXFileReference; lastKnownFileType = text; path = Cube.obj; sourceTree = "<group>"; };
+                89F7A0053ABCDEF000123456 /* Cube.obj */ = {isa = PBXFileReference; lastKnownFileType = text; path = Meshes/Cube.obj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
