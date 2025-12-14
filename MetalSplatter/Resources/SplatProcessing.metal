@@ -1,5 +1,5 @@
 #ifndef NORMAL_ROTATE_BY_QUAT
-#define NORMAL_ROTATE_BY_QUAT 0 // set to 0 to bypass per-splat quaternion rotation for normals
+#define NORMAL_ROTATE_BY_QUAT 1 // set to 0 to bypass per-splat quaternion rotation for normals
 #endif
 
 #import "SplatProcessing.h"
@@ -346,14 +346,9 @@ FragmentIn splatVertex(Splat splat,
     // Base normal straight from the splat (sanitized)
     float3 baseNormal = safeNormalize(float3(splat.normal), float3(0, 0, 1));
 
-#if NORMAL_ROTATE_BY_QUAT
     // Rotate normal by the splat's quaternion (default behavior)
     float4 rotation = float4(splat.rotation);
     float3 n = safeNormalize(rotateVectorByQuaternion(rotation, baseNormal), float3(0, 0, 1));
-#else
-    // Bypass rotation to test if quaternion application is causing artifacts
-    float3 n = baseNormal;
-#endif
 
     out.normal = half3(n);
     out.worldPosition = worldPosition;
