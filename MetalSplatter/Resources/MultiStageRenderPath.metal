@@ -110,7 +110,8 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
                                                      ushort viewIndex [[render_target_array_index]],
                                                      FragmentValues previousFragmentValues [[imageblock_data]],
                                                      constant SplatSHCoefficients* splatSHArray [[ buffer(BufferIndexSphericalHarmonics) ]],
-                                                     constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]]) {
+                                                     constant UniformsArray & uniformsArray [[ buffer(BufferIndexUniforms) ]],
+                                                     constant SphericalHarmonicsDebugUniforms & shDebug [[ buffer(BufferIndexSphericalHarmonicsDebug) ]]) {
     FragmentStore out;
 
     (void)splatSHArray;
@@ -131,13 +132,23 @@ fragment FragmentStore multiStageSplatFragmentShader(FragmentIn in [[stage_in]],
 
     float3 diffuseSH = in.diffuseSH;
     float3 specularSH = in.specularSH;
+    float diffuseMagnitude = length(diffuseSH);
+    float specularMagnitude = length(specularSH);
 
     uint shMask = uniforms.useSHMask;
-    if ((shMask & SphericalHarmonicsUsageDiffuse) == 0) {
-        diffuseSH = float3(0);
-    }
-    if ((shMask & SphericalHarmonicsUsageSpecular) == 0) {
-        specularSH = float3(0);
+    bool maskDebugRequested = shDebug.enableMaskDebug != 0 && (DEBUG_VIEW_VALUE == 28 || DEBUG_VIEW_VALUE == 29);
+    if (maskDebugRequested) {
+        float packedMask = clamp(float(shMask & 0x3u) / 3.0f, 0.0f, 1.0f);
+        float3 debugVector = float3(diffuseMagnitude, specularMagnitude, packedMask);
+        diffuseSH = debugVector;
+        specularSH = debugVector;
+    } else {
+        if ((shMask & SphericalHarmonicsUsageDiffuse) == 0) {
+            diffuseSH = float3(0);
+        }
+        if ((shMask & SphericalHarmonicsUsageSpecular) == 0) {
+            specularSH = float3(0);
+        }
     }
 
     half4 albedoMetallic = half4(in.albedo * alpha, in.metallic * alpha);

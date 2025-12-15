@@ -12,6 +12,7 @@ enum BufferIndex: int32_t
     BufferIndexUniforms = 0,
     BufferIndexSplat    = 1,
     BufferIndexSphericalHarmonics = 2,
+    BufferIndexSphericalHarmonicsDebug = 3,
 };
 
 enum TextureIndex: int32_t
@@ -50,6 +51,14 @@ typedef struct
     uint shCoefficientCount;
     uint useSHMask;
 } Uniforms;
+
+typedef struct
+{
+    uint shCoefficientCount;
+    uint useSHMask;
+    uint debugViewMode;
+    uint enableMaskDebug;
+} SphericalHarmonicsDebugUniforms;
 
 typedef struct
 {

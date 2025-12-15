@@ -275,6 +275,7 @@ public class SplatRenderer {
         case uniforms = 0
         case splat    = 1
         case sphericalHarmonics = 2
+        case sphericalHarmonicsDebug = 3
     }
 
     // Keep in sync with Shaders.metal : TextureIndex
@@ -319,6 +320,13 @@ public class SplatRenderer {
             default: break
             }
         }
+    }
+
+    struct SphericalHarmonicsDebugUniforms {
+        var shCoefficientCount: UInt32
+        var useSHMask: UInt32
+        var debugViewMode: UInt32
+        var enableMaskDebug: UInt32
     }
 
     struct PackedHalf3 {
@@ -479,6 +487,11 @@ public class SplatRenderer {
     var uniformBufferOffset = 0
     var uniformBufferIndex = 0
     var uniforms: UnsafeMutablePointer<UniformsArray>
+    var shDebugUniformBuffer: MTLBuffer
+    var shDebugUniformOffset = 0
+    var shDebugUniforms: UnsafeMutablePointer<SphericalHarmonicsDebugUniforms>
+
+    public var enableSphericalHarmonicsDiagnostics = false
 
     private var configuredSphericalHarmonicsCoefficientCount: UInt32?
     private var configuredSphericalHarmonicsUsageMask: UInt32?
@@ -544,6 +557,12 @@ public class SplatRenderer {
                                                        options: .storageModeShared)!
         self.dynamicUniformBuffers.label = "Uniform Buffers"
         self.uniforms = UnsafeMutableRawPointer(dynamicUniformBuffers.contents()).bindMemory(to: UniformsArray.self, capacity: 1)
+
+        let shDebugUniformBufferSize = MemoryLayout<SphericalHarmonicsDebugUniforms>.stride * maxSimultaneousRenders
+        self.shDebugUniformBuffer = device.makeBuffer(length: shDebugUniformBufferSize, options: .storageModeShared)!
+        self.shDebugUniformBuffer.label = "SH Debug Uniforms"
+        self.shDebugUniforms = UnsafeMutableRawPointer(shDebugUniformBuffer.contents())
+            .bindMemory(to: SphericalHarmonicsDebugUniforms.self, capacity: 1)
 
         self.splatBuffer = try MetalBuffer(device: device)
         self.splatSHBuffer = try MetalBuffer(device: device)
@@ -854,6 +873,7 @@ public class SplatRenderer {
 
     private var didLogEnvironmentFallbackThisFrame = false
     private var didLogBRDFFallbackThisFrame = false
+    private var didLogSphericalHarmonicsDebugThisFrame = false
     private var fallbackFrameStreak: UInt32 = 0
     private var didEscalateFallback = false
 
@@ -861,6 +881,7 @@ public class SplatRenderer {
         materialFallbackTelemetry = MaterialFallbackTelemetry()
         didLogEnvironmentFallbackThisFrame = false
         didLogBRDFFallbackThisFrame = false
+        didLogSphericalHarmonicsDebugThisFrame = false
     }
 
     private func updateGaussianImageRepresentationMetadata() {
@@ -888,6 +909,10 @@ public class SplatRenderer {
         uniformBufferIndex = (uniformBufferIndex + 1) % maxSimultaneousRenders
         uniformBufferOffset = UniformsArray.alignedSize * uniformBufferIndex
         uniforms = UnsafeMutableRawPointer(dynamicUniformBuffers.contents() + uniformBufferOffset).bindMemory(to: UniformsArray.self, capacity: 1)
+
+        shDebugUniformOffset = MemoryLayout<SphericalHarmonicsDebugUniforms>.stride * uniformBufferIndex
+        shDebugUniforms = UnsafeMutableRawPointer(shDebugUniformBuffer.contents() + shDebugUniformOffset)
+            .bindMemory(to: SphericalHarmonicsDebugUniforms.self, capacity: 1)
     }
 
     private func bindMaterialResources(to renderEncoder: MTLRenderCommandEncoder) {
@@ -1009,6 +1034,16 @@ public class SplatRenderer {
                                 indexedSplatCount: UInt32) {
         let shCoefficientCount = effectiveSphericalHarmonicsCoefficientCount()
         let shMask = effectiveSphericalHarmonicsUsageMask()
+
+        if !didLogSphericalHarmonicsDebugThisFrame {
+            didLogSphericalHarmonicsDebugThisFrame = true
+            Self.log.debug("[SH] coefficients=\(shCoefficientCount) useSHMask=0x\(String(shMask, radix: 16)) diagnostics=\(enableSphericalHarmonicsDiagnostics)")
+        }
+
+        shDebugUniforms.pointee = SphericalHarmonicsDebugUniforms(shCoefficientCount: shCoefficientCount,
+                                                                  useSHMask: shMask,
+                                                                  debugViewMode: UInt32(debugViewMode.rawValue),
+                                                                  enableMaskDebug: enableSphericalHarmonicsDiagnostics ? 1 : 0)
         for (i, viewport) in viewports.enumerated() where i <= maxViewCount {
             let cameraPosition = Self.cameraWorldPosition(forViewMatrix: viewport.viewMatrix)
             let uniforms = Uniforms(projectionMatrix: viewport.projectionMatrix,
@@ -1168,8 +1203,10 @@ public class SplatRenderer {
         renderEncoder.setVertexBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setVertexBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
         renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+        renderEncoder.setVertexBuffer(shDebugUniformBuffer, offset: shDebugUniformOffset, index: BufferIndex.sphericalHarmonicsDebug.rawValue)
         renderEncoder.setFragmentBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+        renderEncoder.setFragmentBuffer(shDebugUniformBuffer, offset: shDebugUniformOffset, index: BufferIndex.sphericalHarmonicsDebug.rawValue)
 
         renderEncoder.drawIndexedPrimitives(type: .triangle,
                                             indexCount: indexCount,
@@ -1193,6 +1230,8 @@ public class SplatRenderer {
             renderEncoder.setFragmentBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
             renderEncoder.setVertexBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
             renderEncoder.setFragmentBuffer(splatSHBuffer.buffer, offset: 0, index: BufferIndex.sphericalHarmonics.rawValue)
+            renderEncoder.setVertexBuffer(shDebugUniformBuffer, offset: shDebugUniformOffset, index: BufferIndex.sphericalHarmonicsDebug.rawValue)
+            renderEncoder.setFragmentBuffer(shDebugUniformBuffer, offset: shDebugUniformOffset, index: BufferIndex.sphericalHarmonicsDebug.rawValue)
             renderEncoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             renderEncoder.popDebugGroup()
         } else {
