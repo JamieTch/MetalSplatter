@@ -87,6 +87,9 @@ class VisionSceneRenderer {
 
     private var lastRotationUpdateTimestamp: Date? = nil
     private var interactionState = ModelInteractionState()
+    private var handInteractionEnabledStorage = true
+    private var shouldResetInteractions = false
+    private let interactionSettingsLock = NSLock()
 
     let arSession: ARKitSession
     let worldTracking: WorldTrackingProvider
@@ -403,6 +406,24 @@ class VisionSceneRenderer {
         return true
     }
 
+    private func setHandInteractionEnabled(_ enabled: Bool) {
+        interactionSettingsLock.lock()
+        handInteractionEnabledStorage = enabled
+        if !enabled {
+            shouldResetInteractions = true
+        }
+        interactionSettingsLock.unlock()
+    }
+
+    private func interactionControlState() -> (enabled: Bool, resetRequested: Bool) {
+        interactionSettingsLock.lock()
+        let enabled = handInteractionEnabledStorage
+        let reset = shouldResetInteractions
+        shouldResetInteractions = false
+        interactionSettingsLock.unlock()
+        return (enabled, reset)
+    }
+
     private func updateInteractionState() {
         let now = Date()
         defer { lastRotationUpdateTimestamp = now }
@@ -610,8 +631,15 @@ class VisionSceneRenderer {
             semaphore.signal()
         }
 
+        let interactionControl = interactionControlState()
+        if interactionControl.resetRequested {
+            resetToIdle()
+        }
+
         processCalibrationCommandsIfNeeded()
-        updateInteractionState()
+        if interactionControl.enabled {
+            updateInteractionState()
+        }
         updateEnvironmentProbeIfNeeded()
         applyEnvironmentResourcesIfNeeded()
 
@@ -679,9 +707,16 @@ class VisionSceneRenderer {
         debugViewMode = settings.debugViewMode
         rendererSettingsCancellables.removeAll()
 
+        setHandInteractionEnabled(settings.handInteractionEnabled)
         settings.$debugViewMode
             .sink { [weak self] mode in
                 self?.debugViewMode = mode
+            }
+            .store(in: &rendererSettingsCancellables)
+
+        settings.$handInteractionEnabled
+            .sink { [weak self] isEnabled in
+                self?.setHandInteractionEnabled(isEnabled)
             }
             .store(in: &rendererSettingsCancellables)
 

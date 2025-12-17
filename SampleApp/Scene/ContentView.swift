@@ -120,6 +120,11 @@ struct ContentView: View {
             if case .gaussianSplat = rendererSettings.activeModel {
                 switch rendererSettings.calibrationMode {
                 case .idle:
+                    Toggle("Hand Interactions", isOn: $rendererSettings.handInteractionEnabled)
+                        .padding(.horizontal)
+                        .toggleStyle(.switch)
+                        .disabled(!immersiveSpaceIsShown)
+
                     HStack(spacing: 16) {
                         Button("Calibrate") {
                             rendererSettings.calibrationMode = .running
@@ -136,6 +141,11 @@ struct ContentView: View {
                     }
                     .padding(.bottom)
                 case .running:
+                    Toggle("Hand Interactions", isOn: $rendererSettings.handInteractionEnabled)
+                        .padding(.horizontal)
+                        .toggleStyle(.switch)
+                        .disabled(!immersiveSpaceIsShown)
+
                     HStack(spacing: 16) {
                         Button("Confirm Calibration") {
                             rendererSettings.calibrationCommands.send(.confirm)
