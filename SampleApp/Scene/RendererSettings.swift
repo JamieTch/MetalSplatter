@@ -16,10 +16,12 @@ final class RendererSettings: ObservableObject {
     }
 
     @Published var debugViewMode: SplatRenderer.DebugViewMode = .albedo
+    @Published var handInteractionEnabled: Bool = true
     @Published var activeModel: ModelIdentifier? {
         didSet {
             if oldValue != activeModel {
                 calibrationMode = .idle
+                handInteractionEnabled = true
             }
         }
     }
