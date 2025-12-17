@@ -16,16 +16,30 @@ final class RendererSettings: ObservableObject {
     }
 
     @Published var debugViewMode: SplatRenderer.DebugViewMode = .albedo
-    @Published var handInteractionEnabled: Bool = true
+    @Published var handInteractionEnabled: Bool {
+        didSet {
+            storeHandInteractionEnabled()
+        }
+    }
     @Published var activeModel: ModelIdentifier? {
         didSet {
             if oldValue != activeModel {
                 calibrationMode = .idle
-                handInteractionEnabled = true
             }
         }
     }
     @Published var calibrationMode: CalibrationMode = .idle
+
+    private let handInteractionEnabledKey = "handInteractionEnabled"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if defaults.object(forKey: handInteractionEnabledKey) == nil {
+            defaults.set(true, forKey: handInteractionEnabledKey)
+        }
+        handInteractionEnabled = defaults.bool(forKey: handInteractionEnabledKey)
+    }
 
     let calibrationCommands = PassthroughSubject<CalibrationCommand, Never>()
     let primaryDebugModes: [SplatRenderer.DebugViewMode] = [
@@ -38,6 +52,10 @@ final class RendererSettings: ObservableObject {
         .depth,
         .coverage
     ]
+
+    private func storeHandInteractionEnabled() {
+        defaults.set(handInteractionEnabled, forKey: handInteractionEnabledKey)
+    }
 }
 
 extension SplatRenderer.DebugViewMode {
